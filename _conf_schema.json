@@ -1176,7 +1176,7 @@
     "invisible": true
   },
   "private_image_self_recognition_hint": {
-    "description": "Legacy flat config: 图片转述增强：识别当前角色自己的线索",
+    "description": "Legacy flat config: 图片转述增强：特殊图像身份线索",
     "type": "string",
     "default": "",
     "invisible": true
@@ -5486,9 +5486,9 @@
         "condition": "enable_private_image_gif_enhancement"
       },
       "private_image_self_recognition_hint": {
-        "description": "图片转述增强：识别当前角色自己的线索",
+        "description": "图片转述增强：特殊图像身份线索",
         "type": "string",
-        "hint": "用于私聊单图防抖后的视觉转述。只填写当前角色自己的头像、发色、服装、物种、常见表情包特征、OC 名称、聊天截图昵称等线索；不要填写用户性别、职业或与用户关系。视觉模型会据此判断图里是否疑似是当前角色自己。留空时仍会使用 AstrBot 人格与日程角色设定中的外貌线索。",
+        "hint": "角色姓名、发色、瞳色、服装等外貌会自动从 AstrBot 人格与世界知识读取。这里只填写常用头像、聊天截图昵称、OC 或二创别名、表情包签名、水印等外貌字段无法表达的身份线索；不要重复填写外貌，也不要填写用户资料。留空不影响基于角色外貌的识别。",
         "default": "",
         "condition": "enable_private_image_self_recognition"
       },
