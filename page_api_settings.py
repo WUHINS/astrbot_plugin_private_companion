@@ -1277,6 +1277,7 @@ class PageSettingNormalizerMixin:
             "enable_group_wakeup_enhancement",
             "enable_group_high_intensity_mode",
             "enable_group_injection_guard",
+            "enable_group_third_party_portrait_guard",
             "enable_group_persona_denoise",
             "enable_group_repeat_follow",
             "group_repeat_count_distinct_users_only",

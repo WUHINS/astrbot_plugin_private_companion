@@ -2943,6 +2943,12 @@
     "default": true,
     "invisible": true
   },
+  "enable_group_third_party_portrait_guard": {
+    "description": "Legacy flat config: 群聊第三方画像查询拦截",
+    "type": "bool",
+    "default": true,
+    "invisible": true
+  },
   "enable_worldbook_member_recognition": {
     "description": "Legacy flat config: 启用群聊关系网",
     "type": "bool",
@@ -8769,6 +8775,15 @@
         "description": "启用群聊隐私防串味边界",
         "type": "bool",
         "hint": "群聊回复上下文中强制提醒模型不要泄露私聊记忆、用户画像、内部观察和群友关系判断。",
+        "default": true,
+        "condition": {
+          "enable_group_companion": true
+        }
+      },
+      "enable_group_third_party_portrait_guard": {
+        "description": "群聊第三方画像查询拦截",
+        "type": "bool",
+        "hint": "开启后，Bot 被 @ 时会拦截对其他群成员的偏好、兴趣、习惯、口味或画像查询；关闭后交由 AstrBot 常规回复链路处理。",
         "default": true,
         "condition": {
           "enable_group_companion": true

@@ -1631,6 +1631,16 @@ class Req036CompanionTests(unittest.TestCase):
         self.assertTrue(event.stopped)
         self.assertEqual(["这个我不方便替别人整理啦。"], host.replies)
 
+    def test_group_third_party_guard_can_be_disabled(self) -> None:
+        host = _GroupGateHost()
+        host.enable_group_third_party_portrait_guard = False
+        event = _GroupEvent("@bot 小王有什么爱好", directed=True)
+
+        asyncio.run(REQ036_GROUP_GATE(host, event))
+
+        self.assertFalse(event.stopped)
+        self.assertEqual([], host.replies)
+
     def test_ordinary_group_preference_chatter_is_not_intercepted(self) -> None:
         host = _GroupGateHost()
         event = _GroupEvent("小王有什么爱好")

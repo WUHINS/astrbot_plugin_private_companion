@@ -17196,6 +17196,8 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
         """Reject third-party portrait probing before any retrieval or LLM hook."""
         if self is None or bool(getattr(event, "_private_companion_member_safety_blocked", False)):
             return
+        if not bool(getattr(self, "enable_group_third_party_portrait_guard", True)):
+            return
         group_id = self._extract_group_id_from_event(event)
         if not group_id:
             return

@@ -1360,6 +1360,7 @@ const featureMeta = {
   enable_group_slang_web_search: ["黑话联网参考", "为已有黑话候选搜索外部解释，并判断是否匹配本群用法。默认关闭。"],
   enable_group_relationship_graph: ["群友互动图", "记录成员之间近期谁常互相接话、玩梗或争论。"],
   enable_group_privacy_guard: ["群隐私保护", "保护私聊信息。"],
+  enable_group_third_party_portrait_guard: ["第三方画像拦截", "拦截群聊中对其他成员偏好、兴趣、习惯或画像的查询。"],
   enable_worldbook_member_recognition: ["群聊关系网", "以 QQ 号确认稳定身份，关系备注和重要记忆都放在这里。"],
   enable_cross_user_memory_bridge: ["跨用户记忆", "主要用户可查询 Bot 与其他用户/群聊的近期互动摘要；只读，不发送消息。"],
   enable_atrelay_tools: ["跨群转述", "查询群成员、按关系网解析 @ 对象，并转述到群聊或私聊。"],
@@ -1829,6 +1830,7 @@ const safeFeatureKeys = [
   "enable_passive_response_review",
   "enable_framework_error_leak_guard",
   "enable_group_privacy_guard",
+  "enable_group_third_party_portrait_guard",
   "enable_relationship_analysis",
   "enable_relationship_state_machine",
   "enable_dialogue_episode_memory",
@@ -3800,7 +3802,7 @@ const featureSettingSections = {
     {
       title: "群聊安全保护",
       note: "防提示词污染、隐私串味、群聊私聊腔外溢和现实承诺失控。",
-      keys: ["enable_group_privacy_guard", "enable_group_persona_denoise", "enable_group_reality_promise_guard"],
+      keys: ["enable_group_privacy_guard", "enable_group_third_party_portrait_guard", "enable_group_persona_denoise", "enable_group_reality_promise_guard"],
     },
   ],
   enable_group_wakeup_enhancement: [
@@ -7715,6 +7717,7 @@ const setupGuideAdvancedItems = {
       kind: "feature",
       settings: [
         { key: "enable_group_privacy_guard", type: "bool", kind: "feature", label: "群聊隐私保护", description: "避免跨人泄漏私聊/关系资料。" },
+        { key: "enable_group_third_party_portrait_guard", type: "bool", kind: "feature", label: "第三方画像拦截", description: "拦截对其他群成员偏好、兴趣、习惯或画像的查询。" },
         { key: "enable_group_persona_denoise", type: "bool", kind: "feature", label: "群聊人格降噪", description: "降低私聊腔、状态汇报和过度贴身表达。" },
         { key: "enable_group_reality_promise_guard", type: "bool", kind: "feature", label: "现实承诺保护", description: "避免在群里承诺现实行动。" },
       ],
@@ -26955,6 +26958,12 @@ const featureDetailGuides = {
     trigger: "群聊回复、转述和群主动分享前。",
     enabled: "会拦截或改写可能泄露隐私的内容。",
     disabled: "隐私保护更依赖主模型自身判断，不建议关闭。",
+  },
+  enable_group_third_party_portrait_guard: {
+    summary: "控制群聊中第三方成员画像查询的前置拦截。",
+    trigger: "Bot 被 @ 或回复唤醒，并识别到对其他群成员偏好、兴趣、习惯或画像的查询时。",
+    enabled: "会在常规回复链路前拒绝第三方画像整理请求。",
+    disabled: "此类消息交由 AstrBot 常规回复链路处理。",
   },
   enable_worldbook_member_recognition: {
     summary: "用 QQ 号锚定成员稳定身份，保存称呼、关系备注、边界和重要记忆。",
