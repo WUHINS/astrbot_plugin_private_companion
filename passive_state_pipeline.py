@@ -67,6 +67,7 @@ async def inject_humanized_state(
         return
     is_private_chat = bool(getattr(event, "is_private_chat", lambda: False)())
     private_user_active = False
+    private_user: dict[str, Any] | None = None
     if is_private_chat:
         try:
             resolver = getattr(self, "_private_user_id_for_event", None)
@@ -191,6 +192,7 @@ async def inject_humanized_state(
             current_user=weather_query_user,
         )
     if not self._feature_enabled_or_temp_unlocked("inject_passive_states"):
+        backlog_user: dict[str, Any] | None = None
         if is_private_chat and private_user_active:
             await self._append_reply_style_to_request(event, req, mode="private")
         elif not is_private_chat:

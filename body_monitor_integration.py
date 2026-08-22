@@ -425,6 +425,8 @@ class BodyMonitorIntegration:
             "initialized": False,
         }
         now = time.time()
+        health_mode = str(getattr(self._host, "health_detection_mode", "events_and_proactive") or "events_and_proactive")
+        allow_proactive = health_mode == "events_and_proactive"
         for raw in feed["events"]:
             event = self._normalize_event(raw)
             if event is None:
@@ -440,6 +442,9 @@ class BodyMonitorIntegration:
                 batch["skipped"] += 1
                 continue
             for user_id, user, target_umo in matched:
+                if not allow_proactive:
+                    batch["skipped"] += 1
+                    continue
                 candidate = self._candidate(feed["stream_id"], event, target_umo, now=now)
                 offer = getattr(self._host, "_offer_proactive_candidate", None)
                 if not callable(offer):

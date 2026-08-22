@@ -4753,6 +4753,7 @@ class CommandHandlersMixin:
             getattr(self, "natural_language_photo_extra_prompt", DEFAULT_NATURAL_LANGUAGE_PHOTO_EXTRA_PROMPT)
             or ""
         ).strip()
+        identity_continuity = ""
         visual_memory = self._visual_photo_memory_context(memory_context)
         explicit_people_request = self._natural_photo_prompt_has_explicit_people_request(prompt)
         explicit_back_view_request = self._natural_photo_prompt_has_explicit_back_view_request(prompt)

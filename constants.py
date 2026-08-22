@@ -300,6 +300,7 @@ _REASON_TEXT = {
     "birthday_eve_hint": "在生日前夜留一点轻轻的期待",
     "birthday_makeup": "补上一句生日祝福",
     "birthday_afterglow": "接住生日之后的一点余温",
+    "bot_birthday_share": "今天是我的生日，想和{name}分享这一点点开心",
     "background_schedule": "提一句当前日程",
     "insomnia_night": "睡不着，想跟{name}说说话",
     "goodnight_screen_check": "互道晚安后轻声提醒{name}早点休息",

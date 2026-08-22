@@ -70,28 +70,30 @@ class ModelReplacementStrategyTests(unittest.TestCase):
         conversation_only = _PluginRouteHarness("conversation")
         self.assertEqual("default-provider", conversation_only._task_provider("default-provider"))
 
-    def test_sensitive_refusal_matches_compact_variants(self) -> None:
+    def test_sensitive_refusal_requires_explicit_configured_terms(self) -> None:
+        self.assertEqual("", contains_sensitive_refusal("很抱歉，我无法继续回答这个问题。"))
         self.assertEqual(
             "很抱歉，我无法",
-            contains_sensitive_refusal("很抱歉，我 无法继续回答这个问题。"),
+            contains_sensitive_refusal("很抱歉，我 无法继续回答这个问题。", ["很抱歉，我无法"]),
         )
         self.assertEqual(
             "露骨性行为",
-            contains_sensitive_refusal("这涉及露骨性行为，因此不能继续。"),
+            contains_sensitive_refusal("这涉及露骨性行为，因此不能继续。", "露骨性行为"),
         )
         self.assertEqual(
             "没办法提交这个请求",
-            contains_sensitive_refusal("抱歉，没办法提交这个请求。"),
+            contains_sensitive_refusal("抱歉，没办法提交这个请求。", "没办法提交这个请求"),
         )
         self.assertEqual(
             "The prompt could not be submitted",
             contains_sensitive_refusal(
-                "The prompt could not be submitted. The prompt contains sensitive words."
+                "The prompt could not be submitted. The prompt contains sensitive words.",
+                "The prompt could not be submitted",
             ),
         )
         self.assertEqual(
             "露骨性行为",
-            contains_sensitive_refusal("自定义词表仍会保留内置拒答检测：露骨性行为", "自定义词"),
+            contains_sensitive_refusal("自定义词表只匹配显式配置：露骨性行为", ["露骨性行为"]),
         )
         self.assertEqual("", contains_sensitive_refusal("当然可以，我来帮你处理。"))
 

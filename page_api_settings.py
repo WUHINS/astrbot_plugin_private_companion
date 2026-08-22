@@ -43,6 +43,24 @@ class PageSettingNormalizerMixin:
                 return normalized
         return self._normalize_page_schema_fallback(key, value)
     def _normalize_page_core_setting(self, key: str, value: Any) -> Any:
+        if key == "health_detection_mode":
+            mode = str(value or "events_and_proactive").strip().lower()
+            aliases = {"关闭": "off", "只记录": "events_only", "仅事件": "events_only", "事件+主动": "events_and_proactive"}
+            mode = aliases.get(mode, mode)
+            return mode if mode in {"off", "events_only", "events_and_proactive"} else "events_and_proactive"
+        if key == "mihome_scene_allowlist":
+            raw_items = value if isinstance(value, (list, tuple, set)) else re.split(r"[\r\n,，、;；]+", str(value or ""))
+            return list(dict.fromkeys(str(item).strip()[:120] for item in raw_items if str(item).strip()))[:200]
+        if key == "mihome_device_map":
+            raw = value
+            if isinstance(raw, str):
+                try:
+                    raw = json.loads(raw)
+                except (TypeError, ValueError):
+                    raw = {}
+            if not isinstance(raw, dict):
+                return {}
+            return {str(alias).strip()[:80]: str(did).strip()[:120] for alias, did in raw.items() if str(alias).strip() and str(did).strip()}
         if key == "relationship_stage_policy":
             return relationship_stage_policy_json(value)
         if key == "relationship_positive_stage_cap_key":

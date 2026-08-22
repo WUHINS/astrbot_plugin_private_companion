@@ -879,6 +879,7 @@ class QzoneScheduleMixin:
             source="qzone.publish.memory",
         )
         relationship_authority_guard = self._qzone_relationship_authority_guard()
+        prompt = ""
         if reusable_text:
             text = reusable_text
             logger.info(

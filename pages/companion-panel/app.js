@@ -30,6 +30,8 @@ const state = {
   realityTouchLoading: false,
   realityTouchError: "",
   realityTouchSelectedUserId: "",
+  mihomePanel: { status: null, statusLoading: false, scenes: [], devices: [], deviceStates: {}, loading: false, loadingKind: "", error: "" },
+  mihomeLoginPollTimer: null,
   availableProviders: [],
   availableEmbeddingProviders: [],
   tokenStats: null,
@@ -1389,6 +1391,7 @@ const featureMeta = {
   enable_ai_daily_watch: ["AI 日报/早报追踪", "按配置时间读取黑鸦早报和橘鸦日报，到点后当天只尝试一次。"],
   enable_external_event_self_link: ["外界信息自我关联", "让新闻和搜索结果先变成“这和我有什么关系”的内部意愿，再进入主动候选。"],
   enable_body_monitor_integration: ["健康事件联动", "读取 Body Monitor 提供的健康事件，并在合适时生成低压力的主动关心。"],
+  enable_mihome_integration: ["米家控制", "使用本体内置米家服务读取授权后的场景和已配置设备；不依赖原米家插件代码。"],
   enable_web_exploration: ["主动搜索", "按人格兴趣、最近话题、日程和心情低频使用 AstrBot 网页搜索，形成探索笔记。"],
   enable_web_exploration_boredom_search: ["空档自主搜索", "空闲或无聊时先自行决定搜索主题，再调用网页搜索了解新鲜事物。"],
   enable_qzone_integration: ["QQ 空间动态", "整合查看、点赞、评论和发布说说入口。"],
@@ -1429,10 +1432,18 @@ const featurePublicKeyAliases = {
 
 const featureSearchAliases = {
   enable_body_monitor_integration: "身体状态联动 body monitor",
+  enable_mihome_integration: "内置米家控制",
+  mihome_scene_allowlist: "米家场景白名单",
+  mihome_device_map: "米家设备别名映射",
+  mihome_allow_direct_device_control: "允许直接控制设备",
+  mihome_require_explicit_confirmation: "设备写入要求确认",
+  mihome_read_state_enabled: "允许读取设备状态",
+  health_detection_mode: "健康事件处理模式",
 };
 
 const featureGroups = [
   {
+    navSection: "对话与关系",
     title: "通用能力",
     note: "私聊、群聊和主动链路都会参考的状态、媒介、表达学习、收口与发送能力。",
     keys: [
@@ -1455,6 +1466,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "对话与关系",
     title: "私聊陪伴",
     note: "回复策略、主动计划判定、正文终审和自然表达；两个主动审核开关彼此独立，关闭正文终审不会自动关闭计划人格判定。",
     keys: [
@@ -1472,6 +1484,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "对话与关系",
     title: "用户与好感度",
     note: "用户档案、用户画像、好感度总开关、互动状态与内容尺度配置。",
     keys: [
@@ -1482,6 +1495,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "群聊",
     title: "群聊功能",
     note: "按要解决的问题找开关：启用范围、续话、读空气、合并、理解、安全、唤醒、学习、复读、转述和跨用户记忆。",
     keys: [
@@ -1501,6 +1515,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "记忆与环境",
     title: "环境感知",
     note: "时间、节假日、农历节气、平台和消息媒介。",
     keys: [
@@ -1516,6 +1531,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "记忆与环境",
     title: "外部记忆联动",
     note: "统一管理已适配的外部长期记忆插件；“我会牢牢记住你”/MemoryCompanion 与 LivingMemory 是当前支持项，不代表只绑定其中一种。",
     keys: [
@@ -1523,6 +1539,19 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "现实能力",
+    title: "米家控制",
+    note: "内置米家授权、场景白名单、设备别名和设备控制边界。",
+    keys: ["enable_mihome_integration"],
+  },
+  {
+    navSection: "现实能力",
+    title: "健康检测",
+    note: "Body Monitor 健康事件接收与主动关心策略；没有数据源时不会伪造健康状态。",
+    keys: ["enable_body_monitor_integration"],
+  },
+  {
+    navSection: "主动触达",
     title: "长线主动",
     note: "外部动作和低频分享。",
     keys: [
@@ -1533,7 +1562,6 @@ const featureGroups = [
       "enable_ai_daily_watch",
       "enable_news_boredom_read",
       "enable_external_event_self_link",
-      "enable_body_monitor_integration",
       "enable_web_exploration",
       "enable_web_exploration_boredom_search",
       "enable_qzone_integration",
@@ -1550,6 +1578,7 @@ const featureGroups = [
     ],
   },
   {
+    navSection: "主动触达",
     title: "主动动作",
     note: "识屏、戳一戳和语音等实际对外动作；各动作独立控制额度与冷却。",
     keys: [
@@ -2547,6 +2576,12 @@ const configLabels = {
 };
 
 const configDescriptions = {
+  mihome_scene_allowlist: "每行填写一个场景名称或 ID；留空时模型不会看到任何场景。请先用“米家场景列表”确认名称。",
+  mihome_device_map: "填写 JSON 别名映射，例如 {\"客厅灯\": \"设备 DID\"}；只有列出的设备会进入模型可见目录。",
+  mihome_allow_direct_device_control: "允许模型修改已配置设备的属性；关闭时仍可执行场景和读取状态。",
+  mihome_require_explicit_confirmation: "设备写入前要求用户明确确认，建议保持开启。",
+  mihome_read_state_enabled: "允许模型查询已配置设备的状态；关闭后只保留场景能力。",
+  health_detection_mode: "Body Monitor 事件处理方式。仅接收事件不会生成主动关心，未安装数据源时不会伪造状态。",
   default_interaction_band: "只影响之后建立的档案；亲近和爱意只能由主要用户账户使用。",
   relationship_stage_policy: "固定八阶段键与阈值，只编辑显示、语气、称呼尺度和软行为，不能授予权限。",
   relationship_positive_stage_cap_key: "普通用户（非主要用户）的自动加分与面板手动调分均不能超过该阶段，手动调分超限会明确报错；主要用户不受此上限及下调影响（专属联结模式下分数固定冻结）。",
@@ -3321,6 +3356,8 @@ const featureSettingGroups = {
   inject_passive_states: ["humanized_state_intensity", "enable_passive_state_delta_injection", "enable_passive_state_continuity_anchor"],
   enable_passive_state_delta_injection: ["enable_passive_state_continuity_anchor"],
   enable_health_state: ["humanized_state_intensity"],
+  enable_mihome_integration: ["mihome_scene_allowlist", "mihome_device_map", "mihome_allow_direct_device_control", "mihome_require_explicit_confirmation", "mihome_read_state_enabled"],
+  enable_body_monitor_integration: ["health_detection_mode"],
   enable_hunger_state: ["humanized_state_intensity"],
   enable_cycle_state: ["humanized_state_intensity", ...advancedCycleSettingKeys],
   enable_skill_growth_simulation: ["skill_growth_rate", "enable_skill_growth_passive_injection", "enable_skill_growth_schedule_influence", "skill_growth_schedule_influence_strength"],
@@ -3400,6 +3437,10 @@ const featureSettingGroups = {
 };
 
 const featureSettingSections = {
+  enable_mihome_integration: [
+    { title: "米家权限与范围", note: "先完成米家登录，再填写允许模型使用的场景名称/ID。空白白名单不会暴露任何场景。", keys: ["mihome_scene_allowlist", "mihome_device_map"] },
+    { title: "操作边界", note: "默认只允许读取状态；设备写入需要单独开启，并可要求每次明确确认。", keys: ["mihome_read_state_enabled", "mihome_allow_direct_device_control", "mihome_require_explicit_confirmation"] },
+  ],
   enable_auto_user_profile_creation: [
     {
       title: "自动建档范围",
@@ -4200,6 +4241,12 @@ const featureSettingSections = {
 };
 
 const featureSettingTypes = {
+  mihome_scene_allowlist: { type: "textarea", rows: 4, maxLength: 8000 },
+  mihome_device_map: { type: "textarea", rows: 5, maxLength: 8000 },
+  health_detection_mode: { type: "select", options: [["off", "关闭"], ["events_only", "仅接收事件"], ["events_and_proactive", "接收事件并允许主动关心"]] },
+  mihome_allow_direct_device_control: { type: "checkbox" },
+  mihome_require_explicit_confirmation: { type: "checkbox" },
+  mihome_read_state_enabled: { type: "checkbox" },
   photo_generation_private_owner_max_daily: { type: "number", min: -1, max: 100, step: 1 },
   photo_generation_private_friend_max_daily: { type: "number", min: -1, max: 100, step: 1 },
   photo_generation_group_max_daily: { type: "number", min: -1, max: 100, step: 1 },
@@ -4611,6 +4658,14 @@ function collectSettingValue(key, input) {
     return Array.from(host?.querySelectorAll("[data-multi-persona-profile]:checked") || [])
       .map((item) => String(item.value || "").trim())
       .filter(Boolean);
+  }
+  if (key === "mihome_device_map") {
+    try {
+      const parsed = JSON.parse(String(input.value || "{}"));
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+    } catch {
+      return {};
+    }
   }
   if (input.type === "checkbox") return input.checked;
   if (input.type === "number") {
@@ -5830,9 +5885,9 @@ function loadOptionalClassicScript(relativePath, retry = 0) {
 
 const optionalModuleLoaders = {
   providerTree: [
-    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2", 0),
-    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2", 1),
-    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2", 2),
+    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2&rules=structured-v1", 0),
+    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2&rules=structured-v1", 1),
+    () => loadOptionalClassicScript("./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&manual=provider-input-v2&layout=v2&rules=structured-v1", 2),
   ],
   qzonePanel: [
     () => loadOptionalClassicScript("./js/panels/qzone-panel.js?v=20260810-qzone-classic-loader-v1", 0),
@@ -22168,7 +22223,10 @@ function proactiveCandidateSourceLabel(source) {
 }
 
 function proactiveCandidateReasonLabel(reason) {
-  return { health_alert: "身体状态关心" }[String(reason || "")] || String(reason || "");
+  return {
+    health_alert: "身体状态关心",
+    bot_birthday_share: "Bot 生日分享",
+  }[String(reason || "")] || String(reason || "");
 }
 
 function validProactiveCandidateFilter(data, value) {
@@ -23826,6 +23884,8 @@ function applyRoleplayExample(kind) {
   const form = document.getElementById("roleplayProfileForm");
   if (form) markModuleFormDirty(form);
   resizeRoleplayTextareas();
+  syncRoleplayAppearanceHints();
+  syncRoleplayBirthdayHints();
 }
 
 async function generateRoleplayDraftFromPersona(button) {
@@ -23958,6 +24018,8 @@ function applyRoleplayPersonaDraft(overwrite = false) {
     });
   }
   syncRoleplayStandardFieldsToFreeform();
+  syncRoleplayAppearanceHints();
+  syncRoleplayBirthdayHints();
   const form = document.getElementById("roleplayProfileForm");
   if (changed && form) markModuleFormDirty(form);
   showToast(changed ? `已填入 ${changed} 项，请检查后保存世界知识` : "没有可填入的新字段");
@@ -24069,6 +24131,8 @@ function hydrateRoleplayStandardFields() {
     if (control) control.value = extractTranslationValue(translationText, label);
   });
   setRoleplayMode(roleplayMode());
+  syncRoleplayAppearanceHints();
+  syncRoleplayBirthdayHints();
 }
 
 function composeLabeledParts(attr, parts) {
@@ -25360,19 +25424,37 @@ function featureMatchesCurrentFilters(key, { ignore = "" } = {}) {
 }
 
 function renderFeatureFilterControls(groups, allKeys, visibleCount) {
-  const domainOptions = [
-    { title: "all", label: "全部领域" },
-    ...(anyImageGeneratorInstalled() ? [{ title: "image_generation", label: "生图", capability: true }] : []),
-    ...groups.map((group) => ({ title: group.title, label: group.title })),
-  ];
-  $("#featureDomainFilters").innerHTML = domainOptions.map((option) => {
+  const domainButton = (option) => {
     const count = allKeys.filter((key) => (
       featureMatchesDomainFilter(key, option.title)
       && featureMatchesCurrentFilters(key, { ignore: "domain" })
     )).length;
     const active = state.featureDomainFilter === option.title;
     return `<button type="button" data-feature-domain-filter="${escapeHtml(option.title)}" class="${[active ? "is-active" : "", option.capability ? "is-capability" : ""].filter(Boolean).join(" ")}" role="tab" aria-selected="${active ? "true" : "false"}"><span>${escapeHtml(option.label)}</span><small>${count}</small></button>`;
-  }).join("");
+  };
+  const domainSections = [];
+  const sectionMap = new Map();
+  groups.forEach((group) => {
+    const sectionName = String(group.navSection || "其他功能");
+    if (!sectionMap.has(sectionName)) {
+      const section = { name: sectionName, groups: [] };
+      sectionMap.set(sectionName, section);
+      domainSections.push(section);
+    }
+    sectionMap.get(sectionName).groups.push(group);
+  });
+  $("#featureDomainFilters").innerHTML = `
+    <div class="feature-domain-nav-primary">
+      ${domainButton({ title: "all", label: "全部功能" })}
+      ${anyImageGeneratorInstalled() ? domainButton({ title: "image_generation", label: "生图", capability: true }) : ""}
+    </div>
+    ${domainSections.map((section) => `
+      <section class="feature-domain-nav-section" aria-label="${escapeHtml(section.name)}">
+        <b>${escapeHtml(section.name)}</b>
+        <div>${section.groups.map((group) => domainButton({ title: group.title, label: group.title })).join("")}</div>
+      </section>
+    `).join("")}
+  `;
 
   const stageOptions = [{ id: "all", label: "全部阶段" }, ...featureStageDefinitions];
   $("#featureStageFilters").innerHTML = stageOptions.map((option) => {
@@ -25485,6 +25567,9 @@ function renderFeatureSwitches() {
     $("#featureFlags").innerHTML = featureDetailPage(state.selectedFeatureKey);
     captureFeatureDetailBaselineFromDom($("#featureFlags"));
     bindFeatureDetailActions();
+    if (state.selectedFeatureKey === "enable_mihome_integration" && !state.mihomePanel?.status && !state.mihomePanel?.statusLoading) {
+      void loadMihomeStatus().catch(() => {});
+    }
     syncFeatureFooterAction();
     return;
   }
@@ -25976,6 +26061,103 @@ function bodyMonitorFeatureDetailCard() {
         <div><dt>最近批次</dt><dd>${escapeHtml(bodyMonitorBatchSummary(status.last_batch || {}))}</dd></div>
         ${status.error ? `<div><dt>错误</dt><dd>${escapeHtml(status.error)}</dd></div>` : ""}
       </dl>
+    </article>
+  `;
+}
+
+function mihomeStatusSnapshot() {
+  return state.mihomePanel?.status || state.overview?.mihome || {};
+}
+
+function syncMihomeStatus(status) {
+  if (!status || typeof status !== "object") return;
+  state.mihomePanel = state.mihomePanel || { scenes: [], devices: [] };
+  state.mihomePanel.status = status;
+  state.overview = state.overview || {};
+  state.overview.mihome = { ...(state.overview.mihome || {}), ...status };
+}
+
+async function loadMihomeStatus({ render = true } = {}) {
+  state.mihomePanel = state.mihomePanel || {};
+  state.mihomePanel.statusLoading = true;
+  try {
+    const status = await fetchJson("/mihome/status", { dedupe: false });
+    syncMihomeStatus(status);
+    state.mihomePanel.error = "";
+    if (status?.login_in_progress) scheduleMihomeStatusPoll();
+    else if (state.mihomeLoginPollTimer) {
+      window.clearTimeout(state.mihomeLoginPollTimer);
+      state.mihomeLoginPollTimer = null;
+    }
+    if (render && state.selectedFeatureKey === "enable_mihome_integration") renderFeatureSwitches();
+    return status;
+  } catch (error) {
+    state.mihomePanel.error = error.message || "读取米家状态失败";
+    if (render && state.selectedFeatureKey === "enable_mihome_integration") renderFeatureSwitches();
+    throw error;
+  } finally {
+    state.mihomePanel.statusLoading = false;
+  }
+}
+
+function scheduleMihomeStatusPoll() {
+  if (state.mihomeLoginPollTimer) window.clearTimeout(state.mihomeLoginPollTimer);
+  state.mihomeLoginPollTimer = window.setTimeout(async () => {
+    state.mihomeLoginPollTimer = null;
+    try { await loadMihomeStatus(); } catch (_error) { return; }
+    if (mihomeStatusSnapshot().login_in_progress) scheduleMihomeStatusPoll();
+  }, 1500);
+}
+
+function mihomeFeatureDetailCard() {
+  const status = mihomeStatusSnapshot();
+  const panel = state.mihomePanel || {};
+  const health = state.overview?.health_detection || {};
+  const stateText = status.login_in_progress
+    ? (status.login_message || "等待米家授权")
+    : (status.state_text || "尚未读取状态");
+  const counts = `场景 ${Number(status.scene_count || 0)} · 设备 ${Number(status.device_count || 0)} · 白名单 ${Number(status.allowlist_count || 0)}`;
+  const allowlist = new Set(Array.isArray(status.scene_allowlist) ? status.scene_allowlist.map(String) : []);
+  const scenes = Array.isArray(panel.scenes) ? panel.scenes : [];
+  const devices = Array.isArray(panel.devices) ? panel.devices : [];
+  const deviceMap = status.device_map && typeof status.device_map === "object" ? status.device_map : {};
+  const aliasByDid = Object.fromEntries(Object.entries(deviceMap).map(([alias, did]) => [String(did), String(alias)]));
+  const qrBlock = status.login_in_progress ? `
+    <div class="mihome-qr-box">
+      ${status.qr_image ? `<img src="${escapeHtml(status.qr_image)}" alt="米家登录二维码" loading="lazy">` : `<div class="mihome-qr-placeholder">二维码正在生成，请稍候</div>`}
+      ${status.qr_url ? `<a href="${escapeHtml(status.qr_url)}" target="_blank" rel="noreferrer">在新窗口打开授权链接</a>` : ""}
+      <small>${escapeHtml(status.login_message || "请使用米家 App 扫码授权；页面会自动刷新状态")}</small>
+    </div>` : "";
+  const sceneRows = scenes.length ? scenes.map((item) => {
+    const id = String(item.scene_id || "");
+    const name = String(item.scene_name || id);
+    const checked = allowlist.has(id) || allowlist.has(name);
+    return `<div class="mihome-choice"><input type="checkbox" data-mihome-scene value="${escapeHtml(id)}" data-scene-name="${escapeHtml(name)}" ${checked ? "checked" : ""}><span>${escapeHtml(name)}</span><small>${escapeHtml(id)}</small><button type="button" data-mihome-run-scene data-scene-id="${escapeHtml(id)}" data-scene-name="${escapeHtml(name)}" ${checked ? "" : "disabled"}>执行</button></div>`;
+  }).join("") : `<p class="feature-runtime-note">还没有读取场景。授权成功后点击“读取场景”。</p>`;
+  const deviceRows = devices.length ? devices.map((item) => {
+    const did = String(item.did || "");
+    const alias = String(item.alias || aliasByDid[did] || "");
+    const stateText = panel.deviceStates?.[alias || did] ? JSON.stringify(panel.deviceStates[alias || did]) : "";
+    return `<div class="mihome-device-row"><div><b>${escapeHtml(item.name || did)}</b><small>${escapeHtml(did)}${item.model ? ` · ${escapeHtml(item.model)}` : ""}</small>${stateText ? `<small class="mihome-device-state">${escapeHtml(stateText)}</small>` : ""}</div><input type="text" data-mihome-device-alias data-did="${escapeHtml(did)}" value="${escapeHtml(alias)}" placeholder="模型使用的别名"><button type="button" data-mihome-device-state data-alias="${escapeHtml(alias || did)}" ${alias ? "" : "disabled"}>读状态</button></div>`;
+  }).join("") : `<p class="feature-runtime-note">还没有读取设备。授权成功后点击“读取设备”。</p>`;
+  return `
+    <article class="feature-detail-card mihome-control-card" data-mihome-panel>
+      <div class="mihome-card-head"><div><h3>米家授权与控制</h3><p>在这里完成扫码授权、读取目录，并选择允许模型使用的场景和设备。授权凭证只由本体内置服务保存。</p></div><div class="mihome-actions"><button type="button" data-mihome-login ${status.login_in_progress || !status.available ? "disabled" : ""}>${status.auth_exists ? "重新扫码授权" : "扫码授权"}</button><button type="button" data-mihome-refresh>刷新状态</button></div></div>
+      <dl class="mihome-status-grid">
+        <div><dt>服务状态</dt><dd>${escapeHtml(stateText)}</dd></div>
+        <div><dt>授权凭证</dt><dd>${status.auth_exists ? "已存在" : "未授权"}</dd></div>
+        <div><dt>当前范围</dt><dd>${escapeHtml(counts)}</dd></div>
+        <div><dt>设备写入</dt><dd>${status.direct_control_enabled ? (status.require_explicit_confirmation ? "开启，需确认" : "开启") : "关闭"}</dd></div>
+      </dl>
+      ${!status.enabled ? `<p class="mihome-inline-warning">请先打开本页顶部的“内置米家控制”开关并保存，再开始授权。</p>` : ""}
+      ${qrBlock}
+      ${status.login_status && !status.login_in_progress && status.login_status !== "idle" ? `<p class="feature-runtime-note">${escapeHtml(status.login_message || status.state_text || "")}</p>` : ""}
+      ${state.mihomePanel.error ? `<p class="mihome-inline-warning">${escapeHtml(state.mihomePanel.error)}</p>` : ""}
+      <div class="mihome-catalog-actions"><button type="button" data-mihome-scenes ${!status.auth_exists ? "disabled" : ""}>读取场景</button><button type="button" data-mihome-devices ${!status.auth_exists ? "disabled" : ""}>读取设备</button><button type="button" class="danger" data-mihome-logout ${!status.auth_exists && !status.login_in_progress ? "disabled" : ""}>退出授权</button></div>
+      <section class="mihome-config-section"><header><h4>场景白名单</h4><small>只勾选允许模型执行的场景；留空不会暴露场景能力。</small></header><div class="mihome-choice-list">${sceneRows}</div></section>
+      <section class="mihome-config-section"><header><h4>设备别名</h4><small>给设备填写模型容易理解的别名；空白表示不暴露该设备。</small></header><div class="mihome-device-list">${deviceRows}</div></section>
+      <div class="mihome-save-row"><button type="button" data-mihome-save>保存米家范围</button><small>保存后模型会按白名单和别名访问米家。</small></div>
+      <p class="feature-runtime-note">${escapeHtml(health.source || "健康数据源")}: ${escapeHtml(health.mode_text || "未配置")}</p>
     </article>
   `;
 }
@@ -26759,6 +26941,9 @@ function bindRelationshipPolicyEditor(root = document) {
 }
 
 function featureTextareaValue(key, value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    try { return JSON.stringify(value, null, 2); } catch { return "{}"; }
+  }
   if (!Array.isArray(value)) return String(value ?? "");
   return value.map((item) => {
     if (!item || typeof item !== "object") return String(item ?? "");
@@ -29284,7 +29469,9 @@ function featureDetailPage(key) {
     ? dependencies.map(([name, value]) => `<div><dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("")
     : `<div><dt>-</dt><dd>无额外依赖</dd></div>`;
   const impactRows = impacts.map(([name, value]) => `<div><dt>${escapeHtml(name)}</dt><dd>${escapeHtml(value)}</dd></div>`).join("");
-  const runtimeCardHtml = key === "enable_body_monitor_integration" ? bodyMonitorFeatureDetailCard() : "";
+  const runtimeCardHtml = key === "enable_body_monitor_integration"
+    ? bodyMonitorFeatureDetailCard()
+    : key === "enable_mihome_integration" ? mihomeFeatureDetailCard() : "";
   const personaMigrationCardHtml = key === "enable_multi_persona_mode" ? multiPersonaMigrationDetailCard() : "";
   const managerCardHtml = key === "enable_group_member_safety" ? groupMemberSafetyManagerCardHtml() : "";
   const referenceManagerOpen = key === "enable_photo_text_action" && state.featureDetailSubpage === "photo_reference_library";
@@ -29368,6 +29555,128 @@ function bindFeatureDetailActions() {
     button.addEventListener("click", () => leaveFeatureDetail(button));
   });
   const detailPage = document.querySelector(".feature-detail-page");
+  const mihomeCard = detailPage?.querySelector("[data-mihome-panel]");
+  if (mihomeCard && state.selectedFeatureKey === "enable_mihome_integration") {
+    const refreshMihomeCard = () => renderFeatureSwitches();
+    mihomeCard.querySelector("[data-mihome-refresh]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        await loadMihomeStatus({ render: false });
+        refreshMihomeCard();
+      } catch (error) {
+        showToast(error.message || "读取米家状态失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+    mihomeCard.querySelector("[data-mihome-login]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        const status = await postJson("/mihome/login", {});
+        syncMihomeStatus(status);
+        showToast(status?.login_in_progress ? "二维码已生成，请使用米家 App 扫码" : (status?.login_message || "米家登录已开始"));
+        refreshMihomeCard();
+        if (status?.login_in_progress) scheduleMihomeStatusPoll();
+      } catch (error) {
+        showToast(error.message || "启动米家扫码登录失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+    mihomeCard.querySelector("[data-mihome-scenes]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        const result = await postJson("/mihome/scenes", {});
+        state.mihomePanel.scenes = Array.isArray(result?.scenes) ? result.scenes : [];
+        syncMihomeStatus({ ...(mihomeStatusSnapshot()), scene_count: state.mihomePanel.scenes.length });
+        refreshMihomeCard();
+      } catch (error) {
+        showToast(error.message || "读取米家场景失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+    mihomeCard.querySelectorAll("[data-mihome-run-scene]").forEach((button) => {
+      button.addEventListener("click", async (event) => {
+        const sceneId = String(event.currentTarget.dataset.sceneId || "").trim();
+        const sceneName = String(event.currentTarget.dataset.sceneName || "").trim();
+        if (!sceneId && !sceneName) return;
+        if (!window.confirm(`确认执行米家场景“${sceneName || sceneId}”吗？`)) return;
+        event.currentTarget.disabled = true;
+        try {
+          await postJson("/mihome/scene/run", { scene_id: sceneId, scene_name: sceneName });
+          showToast(`已执行米家场景：${sceneName || sceneId}`);
+        } catch (error) {
+          showToast(error.message || "执行米家场景失败", "error");
+          event.currentTarget.disabled = false;
+        }
+      });
+    });
+    mihomeCard.querySelector("[data-mihome-devices]")?.addEventListener("click", async (event) => {
+      event.currentTarget.disabled = true;
+      try {
+        const result = await postJson("/mihome/devices", {});
+        state.mihomePanel.devices = Array.isArray(result?.devices) ? result.devices : [];
+        syncMihomeStatus({ ...(mihomeStatusSnapshot()), device_count: state.mihomePanel.devices.length });
+        refreshMihomeCard();
+      } catch (error) {
+        showToast(error.message || "读取米家设备失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+    mihomeCard.querySelectorAll("[data-mihome-device-state]").forEach((button) => {
+      button.addEventListener("click", async (event) => {
+        const alias = String(event.currentTarget.dataset.alias || "").trim();
+        if (!alias) return;
+        event.currentTarget.disabled = true;
+        try {
+          const result = await postJson("/mihome/device/state", { alias });
+          state.mihomePanel.deviceStates = { ...(state.mihomePanel.deviceStates || {}), [alias]: result?.state || {} };
+          showToast(`已读取设备状态：${alias}`);
+          refreshMihomeCard();
+        } catch (error) {
+          showToast(error.message || "读取米家设备状态失败", "error");
+          event.currentTarget.disabled = false;
+        }
+      });
+    });
+    mihomeCard.querySelector("[data-mihome-logout]")?.addEventListener("click", async (event) => {
+      if (!window.confirm("退出米家授权并清除本体保存的授权凭证吗？场景白名单和设备别名会保留。")) return;
+      event.currentTarget.disabled = true;
+      try {
+        const result = await postJson("/mihome/logout", {});
+        state.mihomePanel.scenes = [];
+        state.mihomePanel.devices = [];
+        state.mihomePanel.deviceStates = {};
+        syncMihomeStatus(result?.status || {});
+        showToast("米家授权已退出");
+        refreshMihomeCard();
+      } catch (error) {
+        showToast(error.message || "退出米家授权失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+    mihomeCard.querySelector("[data-mihome-save]")?.addEventListener("click", async (event) => {
+      const allowlist = Array.from(mihomeCard.querySelectorAll("[data-mihome-scene]:checked"))
+        .map((input) => String(input.value || input.dataset.sceneName || "").trim())
+        .filter(Boolean);
+      const deviceMap = {};
+      mihomeCard.querySelectorAll("[data-mihome-device-alias]").forEach((input) => {
+        const alias = String(input.value || "").trim();
+        const did = String(input.dataset.did || "").trim();
+        if (alias && did) deviceMap[alias] = did;
+      });
+      event.currentTarget.disabled = true;
+      try {
+        await postJson("/settings/update", { settings: { mihome_scene_allowlist: allowlist, mihome_device_map: deviceMap } });
+        state.overview = state.overview || {};
+        state.overview.settings = { ...(state.overview.settings || {}), mihome_scene_allowlist: allowlist, mihome_device_map: deviceMap };
+        syncMihomeStatus({ ...(mihomeStatusSnapshot()), scene_allowlist: allowlist, allowlist_count: allowlist.length, device_map: deviceMap, device_alias_count: Object.keys(deviceMap).length });
+        showToast("米家场景和设备范围已保存");
+        refreshMihomeCard();
+      } catch (error) {
+        showToast(error.message || "保存米家范围失败", "error");
+        event.currentTarget.disabled = false;
+      }
+    });
+  }
   detailPage?.querySelectorAll("[data-multi-persona-profile]").forEach((input) => {
     input.addEventListener("change", () => {
       const host = input.closest("[data-feature-param-group='multi_persona_ids']");
@@ -29485,6 +29794,8 @@ function bindFeatureDetailActions() {
       event.target?.matches?.("[data-photo-reference-filter], [data-photo-reference-source], [data-photo-reference-note], [data-photo-reference-roles], [data-photo-reference-multi-option], [data-photo-reference-outfit-category], [data-photo-reference-outfit-lock], [data-photo-reference-scenes], [data-photo-reference-times], [data-photo-reference-preferred-preset], [data-photo-reference-persona-source]")
       || event.target?.closest?.("[data-photo-reference-add-form]")
       || event.target?.matches?.("[data-group-safety-manage-group]")
+      || event.target?.matches?.("[data-mihome-scene], [data-mihome-device-alias]")
+      || event.target?.closest?.("[data-mihome-panel]")
     ) return;
     rememberFeatureParamDraft(event.target);
     markFeatureDetailDirty();
@@ -32745,6 +33056,33 @@ function renderExperimentalTheoryMatrix(key) {
   `;
 }
 
+const RT_ICONS = {
+  reality:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v3" /><path d="M12 18v3" /><path d="M4.2 7.5l2.6 1.5" /><path d="M17.2 15l2.6 1.5" /><path d="M4.2 16.5l2.6-1.5" /><path d="M17.2 9l2.6-1.5" /><circle cx="12" cy="12" r="3.2" /></svg>',
+  mobile:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="3" width="10" height="18" rx="2.5" /><path d="M10.8 17.6h2.4" /></svg>',
+  audio:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5v5h3.2L13 19V5L7.2 9.5H4z" /><path d="M16.5 8.8a4.6 4.6 0 0 1 0 6.4" /><path d="M19 6.4a8 8 0 0 1 0 11.2" /></svg>',
+  camera:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 8.5a2 2 0 0 1 2-2h1.6l1.2-1.8h7.4l1.2 1.8h1.6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-8z" /><circle cx="12" cy="12.4" r="3.4" /></svg>',
+  home:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 10.8 12 4l8.5 6.8" /><path d="M5.5 9.8v9.4h13V9.8" /><path d="M9.5 19.2v-5h5v5" /></svg>',
+  health:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12h4l1.8-5 3.2 10 2.1-5h5.9" /><path d="M12 20.2S4.5 15.8 4.5 9.6A3.8 3.8 0 0 1 12 8.1a3.8 3.8 0 0 1 7.5 1.5c0 6.2-7.5 10.6-7.5 10.6Z" /></svg>',
+  people:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.4" r="3.2" /><path d="M3.4 19.4c.7-3 2.9-4.6 5.6-4.6s4.9 1.6 5.6 4.6" /><path d="M15.4 5.6a3.2 3.2 0 0 1 0 5.9" /><path d="M17.4 14.9c2 .5 3.3 1.9 3.8 4" /></svg>',
+  runtime:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 12.4h3.4l2-5.4 3.2 10 2-4.6h6.4" /></svg>',
+  power:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v6.8" /><path d="M7.1 6.3a7 7 0 1 0 9.8 0" /></svg>',
+  clock:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.2" /><path d="M12 7.6V12l3 2" /></svg>',
+  shield:
+    '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.4l6.8 2.4v5.4c0 4.3-2.9 7.4-6.8 9.4-3.9-2-6.8-5.1-6.8-9.4V5.8L12 3.4z" /><path d="M9.2 12l2 2 3.6-3.8" /></svg>',
+};
+
+let realitySectionObserver = null;
+
 function renderRealityTouchMobilePanel() {
   const data = state.realityTouch;
   if (!data) return realityTouchLoadingPanel("手机陪伴终端");
@@ -32754,72 +33092,108 @@ function renderRealityTouchMobilePanel() {
   const clientHost = serverHost === "0.0.0.0" ? "电脑组网 IP" : serverHost;
   const port = Number(mobile.bound_port || mobile.port || 6322);
   const endpoint = `http://${clientHost}:${port}`;
+  const gatewayState = mobile.running ? "ok" : mobile.enabled ? "warn" : "";
+  const gatewayText = mobile.running ? "网关运行中" : mobile.enabled ? "等待重启绑定" : "未启用";
   return `
-    <article id="reality-connect" class="exp-detail-card reality-mobile-card reality-workspace-card">
-      <div class="reality-touch-section-head">
-        <div><span>移动连接</span><h3>手机陪伴终端</h3></div>
-        <span class="reality-audio-backend ${mobile.running ? "ready" : "limited"}">${mobile.running ? "网关运行中" : (mobile.enabled ? "等待重启绑定" : "未启用")}</span>
-      </div>
-      <div class="reality-mobile-summary">
-        <div><span>终端地址</span><b>${escapeHtml(endpoint)}</b></div>
-        <div><span>网关版本</span><b>v${escapeHtml(mobile.gateway_version || "0.2.7")}</b></div>
-        <div><span>终端兼容 API</span><b>v${escapeHtml(mobile.api_version || "1.0")}</b></div>
-        <div><span>配对令牌</span><b>${mobile.pairing_token_configured ? "已配置" : "待生成"}</b></div>
-      </div>
-      <form class="reality-mobile-config" data-reality-mobile-config>
-        <label class="reality-enable-field">
+    <article id="reality-connect" class="exp-detail-card reality-workspace-card rt-card rt-card--mobile">
+      <header class="rt-card-head">
+        <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.mobile}</span>
+        <div class="rt-card-copy">
+          <span>移动连接 · MOBILE LINK</span>
+          <h3>手机陪伴终端</h3>
+        </div>
+        <span class="rt-chip ${gatewayState}">${gatewayText}</span>
+      </header>
+      <section class="rt-endpoint" aria-label="连接概要">
+        <div class="rt-endpoint-main">
+          <span>终端地址</span>
+          <b>${escapeHtml(endpoint)}</b>
+        </div>
+        <dl class="rt-endpoint-meta">
+          <div><dt>网关版本</dt><dd>v${escapeHtml(mobile.gateway_version || "0.2.7")}</dd></div>
+          <div><dt>终端兼容 API</dt><dd>v${escapeHtml(mobile.api_version || "1.0")}</dd></div>
+          <div><dt>配对令牌</dt><dd>${mobile.pairing_token_configured ? "已配置" : "待生成"}</dd></div>
+          <div><dt>活动会话</dt><dd>${Number(mobile.active_sessions || 0)} 个</dd></div>
+        </dl>
+      </section>
+      <form class="rt-form" data-reality-mobile-config>
+        <label class="rt-switch">
           <input type="checkbox" name="mobile_enabled" ${mobile.enabled ? "checked" : ""}>
           <span><b>启用手机陪伴终端网关</b><small>保存后由现实触及扩展重新绑定独立移动端端口。</small></span>
         </label>
-        <label><span>监听 / 组网地址</span><input name="mobile_host" value="${escapeHtml(serverHost)}" placeholder="例如 100.66.1.4"></label>
-        <label><span>端口</span><input name="mobile_port" type="number" min="1" max="65535" value="${Number(mobile.port || 6322)}"></label>
-        <label><span>允许配对的用户 ID</span><input name="mobile_allowed_user_id" value="${escapeHtml(mobile.allowed_user_id || "")}" placeholder="主要用户 ID"></label>
-        <label><span>会话有效期（小时）</span><input name="mobile_session_ttl_hours" type="number" min="1" max="720" value="${Number(mobile.session_ttl_hours || 168)}"></label>
-        <label><span>位置上下文有效期（秒）</span><input name="mobile_location_ttl_seconds" type="number" min="60" max="86400" value="${Number(mobile.location_ttl_seconds || 900)}"></label>
-        <label class="reality-enable-field">
-          <input type="checkbox" name="mobile_amap_reverse_geocode_enabled" ${mobile.amap_reverse_geocode_enabled ? "checked" : ""}>
-          <span><b>启用高德区域识别</b><small>将手机位置转换为城市/城区背景，用于通勤、天气和生活场景；不把精确地址交给陪伴模型。</small></span>
-        </label>
-        <label><span>高德 Web 服务 Key</span><input name="mobile_amap_api_key" type="password" autocomplete="new-password" placeholder="${mobile.amap_api_key_configured ? "已配置，留空保持原值" : "粘贴高德控制台生成的 Key"}"></label>
-        <div class="reality-mobile-inline-fields">
-          <label><span>区域缓存（秒）</span><input name="mobile_amap_cache_ttl_seconds" type="number" min="60" max="604800" step="60" value="${Number(mobile.amap_cache_ttl_seconds || 1800)}"></label>
-          <label><span>请求超时（秒）</span><input name="mobile_amap_request_timeout_seconds" type="number" min="1" max="20" step="1" value="${Number(mobile.amap_request_timeout_seconds || 5)}"></label>
+        <section class="rt-group">
+          <div class="rt-group-head"><b>网络</b><span>手机通过这个地址打开陪伴终端；跨网络建议配置 HTTPS 反代。</span></div>
+          <div class="rt-grid">
+            <label class="rt-field"><span>监听 / 组网地址</span><input name="mobile_host" value="${escapeHtml(serverHost)}" placeholder="例如 100.66.1.4"></label>
+            <label class="rt-field"><span>端口</span><input name="mobile_port" type="number" min="1" max="65535" value="${Number(mobile.port || 6322)}"></label>
+            <label class="rt-field"><span>允许配对的用户 ID</span><input name="mobile_allowed_user_id" value="${escapeHtml(mobile.allowed_user_id || "")}" placeholder="主要用户 ID"></label>
+            <label class="rt-field rt-field--wide"><span>对外基础地址（可选）</span><input name="mobile_public_base_url" value="${escapeHtml(mobile.public_base_url || "")}" placeholder="HTTPS 反代或隧道地址，留空不启用"></label>
+          </div>
+        </section>
+        <section class="rt-group">
+          <div class="rt-group-head"><b>会话与位置</b><span>会话有效期与手机位置上下文的保留时长。</span></div>
+          <div class="rt-grid">
+            <label class="rt-field"><span>会话有效期（小时）</span><input name="mobile_session_ttl_hours" type="number" min="1" max="720" value="${Number(mobile.session_ttl_hours || 168)}"></label>
+            <label class="rt-field"><span>位置上下文有效期（秒）</span><input name="mobile_location_ttl_seconds" type="number" min="60" max="86400" value="${Number(mobile.location_ttl_seconds || 900)}"></label>
+          </div>
+          <label class="rt-switch">
+            <input type="checkbox" name="mobile_amap_reverse_geocode_enabled" ${mobile.amap_reverse_geocode_enabled ? "checked" : ""}>
+            <span><b>启用高德区域识别</b><small>将手机位置转换为城市/城区背景，用于通勤、天气和生活场景；不把精确地址交给陪伴模型。</small></span>
+          </label>
+          <div class="rt-grid">
+            <label class="rt-field rt-field--wide"><span>高德 Web 服务 Key</span><input name="mobile_amap_api_key" type="password" autocomplete="new-password" placeholder="${mobile.amap_api_key_configured ? "已配置，留空保持原值" : "粘贴高德控制台生成的 Key"}"></label>
+            <label class="rt-field"><span>区域缓存（秒）</span><input name="mobile_amap_cache_ttl_seconds" type="number" min="60" max="604800" step="60" value="${Number(mobile.amap_cache_ttl_seconds || 1800)}"></label>
+            <label class="rt-field"><span>请求超时（秒）</span><input name="mobile_amap_request_timeout_seconds" type="number" min="1" max="20" step="1" value="${Number(mobile.amap_request_timeout_seconds || 5)}"></label>
+          </div>
+        </section>
+        <section class="rt-group">
+          <div class="rt-group-head"><b>转发与安全</b><span>房间代理、终端状态同步与配对令牌。</span></div>
+          <label class="rt-switch">
+            <input type="checkbox" name="mobile_proxy_rooms" ${mobile.proxy_rooms !== false ? "checked" : ""}>
+            <span><b>统一代理一起 / 游戏 / 协同房间</b><small>手机只访问移动网关，由网关转发页面、接口、媒体和 WebSocket；推荐保持开启。</small></span>
+          </label>
+          <label class="rt-switch">
+            <input type="checkbox" name="mobile_screen_upload_enabled" ${mobile.screen_upload_enabled !== false ? "checked" : ""}>
+            <span><b>接收终端屏幕共享状态</b><small>只同步前台共享状态，实际画面仍由屏幕扩展处理。</small></span>
+          </label>
+          <div class="rt-grid">
+            <label class="rt-field rt-field--wide"><span>新配对令牌（可选）</span><input name="mobile_pairing_token" type="password" autocomplete="new-password" placeholder="留空保留现有令牌"></label>
+          </div>
+        </section>
+        <div class="rt-actions">
+          <button type="submit" class="rt-btn rt-btn--primary">保存手机终端连接</button>
         </div>
-        <label class="reality-enable-field reality-mobile-proxy-field">
-          <input type="checkbox" name="mobile_proxy_rooms" ${mobile.proxy_rooms !== false ? "checked" : ""}>
-          <span><b>统一代理一起 / 游戏 / 协同房间</b><small>手机只访问移动网关，由网关转发页面、接口、媒体和 WebSocket；推荐保持开启。</small></span>
-        </label>
-        <label class="reality-enable-field">
-          <input type="checkbox" name="mobile_screen_upload_enabled" ${mobile.screen_upload_enabled !== false ? "checked" : ""}>
-          <span><b>接收终端屏幕共享状态</b><small>只同步前台共享状态，实际画面仍由屏幕扩展处理。</small></span>
-        </label>
-        <label><span>新配对令牌（可选）</span><input name="mobile_pairing_token" type="password" autocomplete="new-password" placeholder="留空保留现有令牌"></label>
-        <button type="submit" class="primary">保存手机终端连接</button>
       </form>
-      <div class="reality-mobile-methods">
-        <section>
-          <b>版本与协议</b>
-          <p>当前网关 v${escapeHtml(mobile.gateway_version || "0.2.7")}，手机陪伴终端兼容 API v${escapeHtml(mobile.api_version || "1.0")}。网关升级后建议重新打开连接。</p>
-        </section>
-        <section>
-          <b>怎么连接</b>
-          <ul>
-            <li><strong>同一局域网 / Tailscale、ZeroTier 等组网：</strong>手机填写 <code>http://电脑组网 IP:${port}</code>，不要填写 127.0.0.1、localhost 或 0.0.0.0。</li>
-            <li><strong>跨网络或公网：</strong>给移动网关配置 HTTPS 反向代理或安全隧道，再把 HTTPS 地址填入终端；浏览器房间不要使用公网纯 HTTP。</li>
-            <li><strong>仅本机测试：</strong>只在电脑本机访问 <code>http://127.0.0.1:${port}</code>，手机无法访问这个地址。</li>
-          </ul>
-          <p class="reality-mobile-guide-line">保存配置后，在与 Bot 的私聊发送“现实触及 配对令牌”，再用令牌完成配对。</p>
-        </section>
-        <section class="reality-mobile-troubleshooting">
-          <b>一起功能一直连接中</b>
-          <ul>
-            <li>确认上方“统一代理一起 / 游戏 / 协同房间”已开启。</li>
-            <li>确认手机打开的是移动网关端口 <code>:${port}</code>，不是 Together 直连端口（常见为 <code>:6321</code>）。</li>
-            <li>确认“一起”房间服务已启用、正在运行，并已配置实时共处对话模型。</li>
-            <li>修改端口或代理模式后保存并重启现实触及（或重启 AstrBot），再重新打开房间链接。</li>
-          </ul>
-        </section>
-      </div>
+      <details class="rt-guide">
+        <summary>
+          <span class="rt-guide-title"><b>连接指南与排障</b><small>局域网、跨网络与“一起”房间的连接说明</small></span>
+          <i class="rt-guide-chevron" aria-hidden="true"></i>
+        </summary>
+        <div class="rt-guide-body">
+          <section>
+            <b>版本与协议</b>
+            <p>当前网关 v${escapeHtml(mobile.gateway_version || "0.2.7")}，手机陪伴终端兼容 API v${escapeHtml(mobile.api_version || "1.0")}。网关升级后建议重新打开连接。</p>
+          </section>
+          <section>
+            <b>怎么连接</b>
+            <ul>
+              <li><strong>同一局域网 / Tailscale、ZeroTier 等组网：</strong>手机填写 <code>http://电脑组网 IP:${port}</code>，不要填写 127.0.0.1、localhost 或 0.0.0.0。</li>
+              <li><strong>跨网络或公网：</strong>给移动网关配置 HTTPS 反向代理或安全隧道，再把 HTTPS 地址填入终端；浏览器房间不要使用公网纯 HTTP。</li>
+              <li><strong>仅本机测试：</strong>只在电脑本机访问 <code>http://127.0.0.1:${port}</code>，手机无法访问这个地址。</li>
+            </ul>
+          </section>
+          <section class="rt-guide-fix">
+            <b>一起功能一直连接中</b>
+            <ul>
+              <li>确认“统一代理一起 / 游戏 / 协同房间”已开启。</li>
+              <li>确认手机打开的是移动网关端口 <code>:${port}</code>，不是 Together 直连端口（常见为 <code>:6321</code>）。</li>
+              <li>确认“一起”房间服务已启用、正在运行，并已配置实时共处对话模型。</li>
+              <li>修改端口或代理模式后保存并重启现实触及（或重启 AstrBot），再重新打开房间链接。</li>
+            </ul>
+          </section>
+          <p class="rt-guide-line">保存配置后，在与 Bot 的私聊发送“现实触及 配对令牌”，再用令牌完成配对。</p>
+        </div>
+      </details>
     </article>
   `;
 }
@@ -32832,45 +33206,65 @@ function renderRealityTouchPage() {
   const enabled = Boolean(data?.global_enabled ?? status.enabled);
   const canToggle = Boolean(data && !state.realityTouchLoading && !state.realityTouchError);
   const counts = data?.counts || {};
+  const mobile = data?.configuration?.mobile || {};
+  const reminderCount = Number(counts.scheduled || 0) + Number(counts.custom_scheduled || 0);
+  const loadError = state.realityTouchError
+    ? `<div class="rt-load-error"><div><b>读取现实触及状态失败</b><span>${escapeHtml(state.realityTouchError)}</span></div><button type="button" class="rt-btn" data-reality-touch-refresh>重新读取</button></div>`
+    : "";
   root.innerHTML = `
-    <div class="reality-touch-page ${enabled ? "on" : "off"}">
-      <header class="reality-page-head">
-        <div class="reality-page-head-copy">
-          <span class="module-badge">陪伴扩展</span>
+    <div class="reality-touch-page rt ${enabled ? "on" : "off"}">
+      <header class="rt-hero">
+        <span class="rt-hero-glyph" aria-hidden="true">${RT_ICONS.reality}</span>
+        <div class="rt-hero-copy">
+          <span class="rt-kicker">REALITY TOUCH · 陪伴扩展</span>
           <h2>现实触及</h2>
-          <p>集中管理手机终端、电脑设备、用户授权与现实提醒。能力实现和授权数据仍由“我会来到你身边”维护。</p>
+          <p>按远程终端、设备控制、健康检测和视听能力分区管理。能力实现和授权数据仍由“我会来到你身边”维护。</p>
         </div>
-        <div class="reality-page-actions">
-          <label class="feature-detail-toggle reality-global-toggle">
-            <input type="checkbox" data-reality-global-toggle ${enabled ? "checked" : ""} ${canToggle ? "" : "disabled"}>
-            <span class="feature-toggle-visual"></span>
-            <b>${canToggle ? (enabled ? "已开启" : "未开启") : "读取中"}</b>
-          </label>
-          <button type="button" data-reality-touch-refresh>${state.realityTouchLoading ? "正在刷新" : "刷新状态"}</button>
+        <div class="rt-hero-actions">
+          <div class="rt-master">
+            <label class="feature-detail-toggle reality-global-toggle">
+              <input type="checkbox" data-reality-global-toggle ${enabled ? "checked" : ""} ${canToggle ? "" : "disabled"}>
+              <span class="feature-toggle-visual"></span>
+              <b>${canToggle ? (enabled ? "已开启" : "未开启") : "读取中"}</b>
+            </label>
+            <small>${enabled ? "设备能力开放中" : "关闭时保留全部配置"}</small>
+          </div>
+          <button type="button" class="rt-btn rt-btn--ghost" data-reality-touch-refresh>${state.realityTouchLoading ? "正在刷新" : "刷新状态"}</button>
         </div>
       </header>
-      <div class="reality-page-status-grid">
-        <article class="${enabled ? "is-positive" : "is-muted"}"><span>扩展状态</span><b>${enabled ? "已启用" : "已安装 · 未启用"}</b><small>${status.available === false ? "当前不可用" : "已连接陪伴面板"}</small></article>
-        <article class="${data?.configuration?.mobile?.running ? "is-positive" : "is-muted"}"><span>手机终端</span><b>${data?.configuration?.mobile?.running ? "已连接网关" : (data?.configuration?.mobile?.enabled ? "等待绑定" : "未启用")}</b><small>${Number(data?.configuration?.mobile?.active_sessions || 0)} 个活动会话</small></article>
-        <article class="is-info"><span>现实授权</span><b>${Number(counts.consented || 0)} 人</b><small>摄像头授权 ${Number(counts.camera_consented || 0)} 人</small></article>
-        <article class="${Number(counts.scheduled || 0) + Number(counts.custom_scheduled || 0) ? "is-warm" : "is-muted"}"><span>待执行提醒</span><b>${Number(counts.scheduled || 0) + Number(counts.custom_scheduled || 0)}</b><small>官方任务与计划场景</small></article>
+      <div class="rt-stats">
+        <article class="rt-stat ${enabled ? "is-on" : "is-muted"}">
+          <span class="rt-stat-glyph" aria-hidden="true">${RT_ICONS.power}</span>
+          <div><span>扩展状态</span><b>${enabled ? "已启用" : "已安装 · 未启用"}</b><small>${status.available === false ? "当前不可用" : "已连接陪伴面板"}</small></div>
+        </article>
+        <article class="rt-stat ${mobile.running ? "is-on" : "is-muted"}">
+          <span class="rt-stat-glyph" aria-hidden="true">${RT_ICONS.mobile}</span>
+          <div><span>手机终端</span><b>${mobile.running ? "已连接网关" : mobile.enabled ? "等待绑定" : "未启用"}</b><small>${Number(mobile.active_sessions || 0)} 个活动会话</small></div>
+        </article>
+        <article class="rt-stat is-info">
+          <span class="rt-stat-glyph" aria-hidden="true">${RT_ICONS.shield}</span>
+          <div><span>现实授权</span><b>${Number(counts.consented || 0)} 人</b><small>摄像头授权 ${Number(counts.camera_consented || 0)} 人</small></div>
+        </article>
+        <article class="rt-stat ${reminderCount ? "is-warm" : "is-muted"}">
+          <span class="rt-stat-glyph" aria-hidden="true">${RT_ICONS.clock}</span>
+          <div><span>待执行提醒</span><b>${reminderCount}</b><small>官方任务与计划场景</small></div>
+        </article>
       </div>
-      <nav class="reality-section-nav" aria-label="现实触及页面分区">
-        <a href="#reality-connect"><span>01</span>手机连接</a>
-        <a href="#reality-audio"><span>02</span>音频输出</a>
-        <a href="#reality-camera"><span>03</span>摄像头</a>
-        <a href="#reality-automation"><span>04</span>用户与提醒</a>
-        <a href="#reality-runtime"><span>05</span>运行状态</a>
-      </nav>
-      <div class="reality-console-layout">
-        <main class="reality-console-main">
+      ${loadError}
+      <div class="rt-body">
+        <nav class="rt-rail" aria-label="现实触及页面分区">
+          <span class="rt-rail-label">能力分类</span>
+          <button type="button" class="rt-rail-item is-active" data-reality-capability="mobile"><i aria-hidden="true">${RT_ICONS.mobile}</i><span>远程终端</span><em>01</em></button>
+          <button type="button" class="rt-rail-item" data-reality-capability="mihome"><i aria-hidden="true">${RT_ICONS.home}</i><span>设备控制</span><em>02</em></button>
+          <button type="button" class="rt-rail-item" data-reality-capability="health"><i aria-hidden="true">${RT_ICONS.health}</i><span>健康检测</span><em>03</em></button>
+          <button type="button" class="rt-rail-item" data-reality-capability="av"><i aria-hidden="true">${RT_ICONS.audio}</i><span>视听能力</span><em>04</em></button>
+        </nav>
+        <div class="rt-flow">
           ${renderRealityTouchMobilePanel()}
           ${renderRealityTouchDevicePanel()}
           ${renderRealityTouchSettings()}
-        </main>
-        <aside class="reality-console-aside" aria-label="现实触及运行摘要">
           ${renderRealityTouchRuntime()}
-        </aside>
+        </div>
       </div>
     </div>
   `;
@@ -34974,12 +35368,12 @@ function realityTouchLoadingPanel(title) {
   const detail = state.realityTouchError
     ? `<div class="exp-settings-empty error">${escapeHtml(state.realityTouchError)}</div>`
     : `<div class="exp-settings-empty">${state.realityTouchLoading ? "正在读取用户授权和闹钟设置..." : "暂无现实触及运行数据。"}</div>`;
-  return `<article class="exp-detail-card reality-touch-card"><h3>${escapeHtml(title)}</h3>${detail}</article>`;
+  return `<article class="exp-detail-card reality-workspace-card rt-card rt-card--loading"><h3>${escapeHtml(title)}</h3>${detail}</article>`;
 }
 
 function renderRealityTouchDevicePanel() {
   const data = state.realityTouch;
-  if (!data) return realityTouchLoadingPanel("设备路由");
+  if (!data) return realityTouchLoadingPanel("音频输出与摄像头");
   const audio = data.audio_output || {};
   const devices = Array.isArray(audio.devices) ? audio.devices : [];
   const selectedId = String(audio.selected_device_id || "system_default");
@@ -35008,63 +35402,88 @@ function renderRealityTouchDevicePanel() {
     : null;
   const canTestCamera = Boolean(data.global_enabled && camera.global_enabled && cameraState.eligible && cameraState.consented && cameraState.enabled && cameraBackend.available);
   return `
-    <article id="reality-audio" class="exp-detail-card reality-device-card reality-workspace-card">
-      <div class="reality-touch-section-head">
-        <div><span>能力出口</span><h3>音频输出</h3></div>
-        <span class="reality-audio-backend ${audio.backend_available ? "ready" : "limited"}">${audio.backend_available ? "设备直连可用" : "仅系统默认"}</span>
-      </div>
-      <p class="reality-device-intro">选择现实触及实际播放到的电脑输出端点。蓝牙音响需要先由 Windows 完成连接；插件不负责配对。</p>
-      <div class="reality-device-controls">
-        <label>
+    <article id="reality-audio" class="exp-detail-card reality-workspace-card rt-card rt-card--audio">
+      <header class="rt-card-head">
+        <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.audio}</span>
+        <div class="rt-card-copy">
+          <span>能力出口 · AUDIO OUT</span>
+          <h3>音频输出</h3>
+        </div>
+        <span class="rt-chip ${audio.backend_available ? "ok" : "warn"}">${audio.backend_available ? "设备直连可用" : "仅系统默认"}</span>
+      </header>
+      <p class="rt-card-intro">选择现实触及实际播放到的电脑输出端点。蓝牙音响需要先由 Windows 完成连接；插件不负责配对。</p>
+      <div class="rt-audio-board">
+        <label class="rt-field rt-audio-device">
           <span>输出设备</span>
           <select data-reality-touch-device>${options || '<option value="system_default">跟随系统默认输出</option>'}</select>
         </label>
-        <button type="button" class="primary" data-reality-touch-device-save>保存设备与音量</button>
-        <button type="button" data-reality-touch-refresh>刷新列表</button>
-        <button type="button" data-reality-touch-test data-reality-touch-test-kind="device" ${canTest ? "" : "disabled"}>播放固定测试音频</button>
+        <div class="rt-volume">
+          <div class="rt-volume-head">
+            <span>现实触及播放音量</span>
+            <output data-reality-touch-volume-output>${Number(audio.playback_volume ?? 35)}%</output>
+          </div>
+          <input type="range" data-reality-touch-volume min="0" max="100" step="1" value="${Number(audio.playback_volume ?? 35)}">
+          <small>仅影响现实触及的本机播放，不修改普通聊天 TTS 音量。</small>
+        </div>
+        <div class="rt-audio-actions">
+          <button type="button" class="rt-btn rt-btn--primary" data-reality-touch-device-save>保存设备与音量</button>
+          <button type="button" class="rt-btn" data-reality-touch-refresh>刷新列表</button>
+          <button type="button" class="rt-btn" data-reality-touch-test data-reality-touch-test-kind="device" ${canTest ? "" : "disabled"}>播放测试音频</button>
+        </div>
       </div>
-      <label class="reality-device-volume">
-        <span>现实触及播放音量 <output data-reality-touch-volume-output>${Number(audio.playback_volume ?? 35)}%</output></span>
-        <input type="range" data-reality-touch-volume min="0" max="100" step="1" value="${Number(audio.playback_volume ?? 35)}">
-        <small>仅影响现实触及的本机播放，不修改普通聊天 TTS 音量。</small>
-      </label>
-      <div class="reality-device-status ${audio.selected_device_missing ? "error" : ""}">
+      <div class="rt-note ${audio.selected_device_missing ? "is-error" : ""}">
         <b>${audio.selected_device_missing ? "所选设备当前离线" : `当前路由：${escapeHtml(audio.label || "跟随系统默认输出")}`}</b>
         <span>${escapeHtml(audio.error || (audio.backend_available ? "指定设备离线或播放失败时，会自动回退到系统默认输出并记录诊断。" : "安装音频路由依赖并重载插件后，可选择具体耳机、扬声器或蓝牙音响。"))}</span>
       </div>
     </article>
-    <article id="reality-camera" class="exp-detail-card reality-device-card reality-workspace-card">
-      <div class="reality-touch-section-head">
-        <div><span>环境感知</span><h3>摄像头</h3></div>
-        <span class="reality-audio-backend ${cameraBackend.available ? "ready" : "limited"}">${cameraBackend.available ? "单帧后端可用" : "后端不可用"}</span>
-      </div>
-      <p class="reality-device-intro">页面不会自动扫描。点击“扫描摄像头”只读取设备名称和 OpenCV 索引，不采集画面；真正可用性由授权后的单帧测试确认。</p>
-      <form class="reality-device-controls" data-reality-touch-camera-config>
-        <label class="reality-enable-field">
+    <article id="reality-camera" class="exp-detail-card reality-workspace-card rt-card rt-card--camera">
+      <header class="rt-card-head">
+        <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.camera}</span>
+        <div class="rt-card-copy">
+          <span>环境感知 · VISION</span>
+          <h3>摄像头</h3>
+        </div>
+        <span class="rt-chip ${cameraBackend.available ? "ok" : "warn"}">${cameraBackend.available ? "单帧后端可用" : "后端不可用"}</span>
+      </header>
+      <p class="rt-card-intro">页面不会自动扫描。点击“扫描摄像头”只读取设备名称和 OpenCV 索引，不采集画面；真正可用性由授权后的单帧测试确认。</p>
+      <form class="rt-form" data-reality-touch-camera-config>
+        <label class="rt-switch">
           <input type="checkbox" name="camera_enabled" ${camera.global_enabled ? "checked" : ""}>
           <span><b>启用摄像头能力总开关</b><small>仍需当前用户单独授权并开启用户策略。</small></span>
         </label>
-        <label class="reality-enable-field">
+        <label class="rt-switch">
           <input type="checkbox" name="proactive_curiosity_enabled" ${camera.proactive_curiosity_enabled ? "checked" : ""}>
           <span><b>启用主动视觉好奇链路</b><small>作为独立候选交给主动 Agent 按语义判断，不按吃饭、穿搭等关键词硬触发。</small></span>
         </label>
-        <label><span>摄像头设备</span><select name="camera_index">${cameraIndexKnown ? "" : `<option value="${currentCameraIndex}" selected>当前手动索引 ${currentCameraIndex}</option>`}${cameraIndexOptions || `<option value="${currentCameraIndex}">尚未扫描 · 当前索引 ${currentCameraIndex}</option>`}</select></label>
-        <label><span>最小读取间隔</span><input type="number" name="min_interval_seconds" min="10" max="3600" step="10" value="${Number(camera.min_interval_seconds ?? 60)}"></label>
-        <label><span>读取超时</span><input type="number" name="capture_timeout_seconds" min="2" max="20" step="1" value="${Number(camera.capture_timeout_seconds ?? 5)}"></label>
-        <label><span>视觉分析超时</span><input type="number" name="analysis_timeout_seconds" min="5" max="90" step="5" value="${Number(camera.analysis_timeout_seconds ?? 25)}"></label>
-        <label><span>允许直看的最低主动档</span><select name="proactive_min_tier">${[[1, "L1 克制"], [2, "L2 轻陪伴"], [3, "L3 稳定陪伴"], [4, "L4 亲密陪伴"], [5, "L5 持续在线"]].map(([value, label]) => `<option value="${value}" ${Number(camera.proactive_min_tier ?? 4) === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
-        <label><span>主动单帧每日上限</span><input type="number" name="proactive_max_daily" min="0" max="10" step="1" value="${Number(camera.proactive_max_daily ?? 1)}"><small>0 表示只可询问</small></label>
-        <label><span>主动单帧行为冷却</span><input type="number" name="proactive_cooldown_minutes" min="10" max="1440" step="10" value="${Number(camera.proactive_cooldown_minutes ?? 240)}"><small>分钟</small></label>
-        <button type="submit" class="primary">保存摄像头配置</button>
-        <button type="button" data-reality-touch-camera-scan ${cameraBackend.enumerator_available ? "" : "disabled"}>扫描摄像头</button>
-        <button type="button" data-reality-touch-camera-test ${canTestCamera ? "" : "disabled"}>读取并预览单帧</button>
+        <section class="rt-group">
+          <div class="rt-group-head"><b>设备与读取</b><span>选择摄像头入口并限制读取节奏。</span></div>
+          <div class="rt-grid">
+            <label class="rt-field rt-field--wide"><span>摄像头设备</span><select name="camera_index">${cameraIndexKnown ? "" : `<option value="${currentCameraIndex}" selected>当前手动索引 ${currentCameraIndex}</option>`}${cameraIndexOptions || `<option value="${currentCameraIndex}">尚未扫描 · 当前索引 ${currentCameraIndex}</option>`}</select></label>
+            <label class="rt-field"><span>最小读取间隔（秒）</span><input type="number" name="min_interval_seconds" min="10" max="3600" step="10" value="${Number(camera.min_interval_seconds ?? 60)}"></label>
+            <label class="rt-field"><span>读取超时（秒）</span><input type="number" name="capture_timeout_seconds" min="2" max="20" step="1" value="${Number(camera.capture_timeout_seconds ?? 5)}"></label>
+            <label class="rt-field"><span>视觉分析超时（秒）</span><input type="number" name="analysis_timeout_seconds" min="5" max="90" step="5" value="${Number(camera.analysis_timeout_seconds ?? 25)}"></label>
+          </div>
+        </section>
+        <section class="rt-group">
+          <div class="rt-group-head"><b>主动好奇限制</b><span>决定 Bot 什么时候可以主动看一眼。</span></div>
+          <div class="rt-grid">
+            <label class="rt-field"><span>允许直看的最低主动档</span><select name="proactive_min_tier">${[[1, "L1 克制"], [2, "L2 轻陪伴"], [3, "L3 稳定陪伴"], [4, "L4 亲密陪伴"], [5, "L5 持续在线"]].map(([value, label]) => `<option value="${value}" ${Number(camera.proactive_min_tier ?? 4) === value ? "selected" : ""}>${label}</option>`).join("")}</select></label>
+            <label class="rt-field"><span>主动单帧每日上限</span><input type="number" name="proactive_max_daily" min="0" max="10" step="1" value="${Number(camera.proactive_max_daily ?? 1)}"><small>0 表示只可询问</small></label>
+            <label class="rt-field"><span>主动单帧行为冷却（分钟）</span><input type="number" name="proactive_cooldown_minutes" min="10" max="1440" step="10" value="${Number(camera.proactive_cooldown_minutes ?? 240)}"></label>
+          </div>
+        </section>
+        <div class="rt-actions">
+          <button type="submit" class="rt-btn rt-btn--primary">保存摄像头配置</button>
+          <button type="button" class="rt-btn" data-reality-touch-camera-scan ${cameraBackend.enumerator_available ? "" : "disabled"}>扫描摄像头</button>
+          <button type="button" class="rt-btn" data-reality-touch-camera-test ${canTestCamera ? "" : "disabled"}>读取并预览单帧</button>
+        </div>
       </form>
-      <div class="reality-device-status ${cameraBackend.available ? "" : "error"}">
+      <div class="rt-note ${cameraBackend.available ? "" : "is-error"}">
         <b>${camera.global_enabled ? `当前使用摄像头索引 ${Number(camera.camera_index ?? 0)}` : "摄像头能力总开关关闭"}</b>
         <span>${escapeHtml(camera.devices_error || cameraBackend.error || (camera.devices_scanned_at ? `上次扫描发现 ${cameraDevices.length} 个入口；同一实体摄像头可能因 DirectShow/Media Foundation 显示多个索引。` : "尚未扫描设备。扫描不会采集画面。"))}</span>
       </div>
       ${cameraPreview ? `
-        <figure class="reality-camera-preview">
+        <figure class="rt-camera-preview">
           <img src="${escapeHtml(cameraPreview.data_url)}" alt="本次摄像头单帧临时预览">
           <figcaption><b>本次临时预览</b><span>仅保留在当前页面内存中；刷新或离开页面即消失，不写入插件数据和磁盘。</span></figcaption>
         </figure>
@@ -35075,16 +35494,20 @@ function renderRealityTouchDevicePanel() {
 
 function renderRealityTouchSettings() {
   const data = state.realityTouch;
-  if (!data) return realityTouchLoadingPanel("主动语音与计划场景");
+  if (!data) return realityTouchLoadingPanel("用户授权与提醒");
   const users = Array.isArray(data.users) ? data.users : [];
   const user = selectedRealityTouchUser();
   if (!user) {
     return `
-      <article id="reality-automation" class="exp-detail-card reality-touch-card reality-workspace-card">
-        <div class="reality-touch-section-head">
-          <div><span>用户与场景</span><h3>主动语音扩展</h3></div>
-          <button type="button" class="soft" data-reality-touch-refresh>刷新</button>
-        </div>
+      <article id="reality-automation" class="exp-detail-card reality-workspace-card rt-card rt-card--people">
+        <header class="rt-card-head">
+          <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.people}</span>
+          <div class="rt-card-copy">
+            <span>用户与场景 · CONSENT &amp; REMINDERS</span>
+            <h3>用户授权与现实提醒</h3>
+          </div>
+          <button type="button" class="rt-btn rt-btn--ghost" data-reality-touch-refresh>刷新</button>
+        </header>
         <div class="exp-settings-empty">还没有可配置的私聊用户。请先让用户与 Bot 建立一次私聊，再刷新本页。</div>
       </article>
     `;
@@ -35104,164 +35527,166 @@ function renderRealityTouchSettings() {
     const suffix = granted.length ? ` · 已授权${granted.join("+")}` : " · 待确认";
     return `<option value="${escapeHtml(item.user_id)}" ${selected}>${escapeHtml((item.label || item.user_id) + suffix)}</option>`;
   }).join("");
+  const formDisabled = confirmed ? "" : "disabled";
+  const testDisabled = data.global_enabled && confirmed && alarm.time ? "" : "disabled";
   const dayLabels = ["一", "二", "三", "四", "五", "六", "日"];
   const activeDays = new Set(Array.isArray(alarm.days) ? alarm.days.map(Number) : [0, 1, 2, 3, 4, 5, 6]);
   const dayChecks = dayLabels.map((label, index) => `
-    <label class="reality-day-check">
+    <label class="rt-day">
       <input type="checkbox" name="reality_day" value="${index}" ${activeDays.has(index) ? "checked" : ""} ${confirmed ? "" : "disabled"}>
       <span>周${label}</span>
     </label>
   `).join("");
-  const formDisabled = confirmed ? "" : "disabled";
-  const testDisabled = data.global_enabled && confirmed && alarm.time ? "" : "disabled";
+  const audioBadge = confirmed ? "ok" : "todo";
+  const cameraBadge = !cameraEligible ? "mute" : cameraConfirmed ? "ok" : "todo";
+  const cameraBadgeText = !cameraEligible ? "摄像头 · 不适用" : cameraConfirmed ? "摄像头 · 已授权" : "摄像头 · 待确认";
   return `
-    <article id="reality-automation" class="exp-detail-card reality-touch-card reality-workspace-card">
-      <div class="reality-touch-section-head">
-        <div><span>用户与场景</span><h3>主动语音扩展</h3></div>
-        <button type="button" class="soft" data-reality-touch-refresh>刷新状态</button>
+    <article id="reality-automation" class="exp-detail-card reality-workspace-card rt-card rt-card--people">
+      <header class="rt-card-head">
+        <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.people}</span>
+        <div class="rt-card-copy">
+          <span>用户与场景 · CONSENT &amp; REMINDERS</span>
+          <h3>用户授权与现实提醒</h3>
+        </div>
+        <button type="button" class="rt-btn rt-btn--ghost" data-reality-touch-refresh>刷新状态</button>
+      </header>
+      <div class="rt-user-bar">
+        <label class="rt-field rt-user-select">
+          <span>配置对象</span>
+          <select data-reality-touch-user>${options}</select>
+        </label>
+        <div class="rt-user-badges">
+          <span class="rt-badge ${audioBadge}">${confirmed ? "音频 · 已授权" : "音频 · 待确认"}</span>
+          <span class="rt-badge ${cameraBadge}">${cameraBadgeText}</span>
+        </div>
       </div>
-      <label class="reality-user-select">
-        <span>配置对象</span>
-        <select data-reality-touch-user>${options}</select>
-      </label>
-      <section class="reality-consent-strip ${confirmed ? "ok" : "pending"}">
-        <div>
-          <b>${confirmed ? "用户已完成知情确认" : "等待用户本人确认"}</b>
-          <span>${confirmed ? `仅授权本机音频 · 协议 v${escapeHtml(String(consent.version || data.consent_version || 1))}` : "页面不能代替用户授权。请让该用户在与 Bot 的私聊中手动发送下方完整命令。"}</span>
+      <section class="rt-auth" aria-label="知情确认进度">
+        <div class="rt-auth-step ${confirmed ? "ok" : "todo"}">
+          <span class="rt-auth-no" aria-hidden="true">1</span>
+          <div class="rt-auth-body">
+            <b>${confirmed ? "本机音频已完成知情确认" : "等待用户本人确认本机音频"}</b>
+            <span>${confirmed ? `仅授权本机音频 · 协议 v${escapeHtml(String(consent.version || data.consent_version || 1))}` : "页面不能代替用户授权。请让该用户在与 Bot 的私聊中手动发送下方完整命令。"}</span>
+          </div>
+          ${confirmed
+            ? `<span class="rt-auth-time">${consent.confirmed_at ? escapeHtml(formatDailyReviewTime(consent.confirmed_at)) : "已记录"}</span>`
+            : `<button type="button" class="rt-btn" data-reality-touch-copy>复制确认命令</button>`}
         </div>
-        ${confirmed ? `<span class="reality-consent-time">${consent.confirmed_at ? escapeHtml(formatDailyReviewTime(consent.confirmed_at)) : "已记录"}</span>` : `<button type="button" data-reality-touch-copy>复制确认命令</button>`}
-      </section>
-      ${confirmed ? "" : `<div class="reality-command-box"><code>${escapeHtml(command)}</code></div>`}
-      <section class="reality-consent-strip ${cameraConfirmed ? "ok" : "pending"}">
-        <div>
-          <b>${!cameraEligible ? "该用户不能访问主机摄像头" : cameraConfirmed ? "主机管理用户已授权摄像头单帧" : "摄像头仍需主机管理用户独立确认"}</b>
-          <span>${!cameraEligible ? "摄像头观察的是运行 AstrBot 的主机环境，只允许 AstrBot 管理员或关系角色明确设为 owner 的主要用户使用。普通私聊、目标用户名单与主动权限均不会授予摄像头访问。" : cameraConfirmed ? `仅授权 camera_single_frame · 协议 v${escapeHtml(String(cameraState.consent_version || 1))}` : "音频授权不会自动开放摄像头。请由主机管理用户在自己的私聊中发起确认。"}</span>
+        ${confirmed ? "" : `<div class="rt-command"><code>${escapeHtml(command)}</code></div>`}
+        <div class="rt-auth-step ${cameraConfirmed ? "ok" : "todo"}">
+          <span class="rt-auth-no" aria-hidden="true">2</span>
+          <div class="rt-auth-body">
+            <b>${!cameraEligible ? "该用户不能访问主机摄像头" : cameraConfirmed ? "主机管理用户已授权摄像头单帧" : "摄像头仍需主机管理用户独立确认"}</b>
+            <span>${!cameraEligible ? "摄像头观察的是运行 AstrBot 的主机环境，只允许 AstrBot 管理员或关系角色明确设为 owner 的主要用户使用。普通私聊、目标用户名单与主动权限均不会授予摄像头访问。" : cameraConfirmed ? `仅授权 camera_single_frame · 协议 v${escapeHtml(String(cameraState.consent_version || 1))}` : "音频授权不会自动开放摄像头。请由主机管理用户在自己的私聊中发起确认。"}</span>
+          </div>
+          ${!cameraEligible
+            ? ""
+            : cameraConfirmed
+              ? `<span class="rt-auth-time">${cameraState.confirmed_at ? escapeHtml(formatDailyReviewTime(cameraState.confirmed_at)) : "已记录"}</span>`
+              : `<button type="button" class="rt-btn" data-reality-touch-camera-copy>复制摄像头确认命令</button>`}
         </div>
-        ${!cameraEligible ? "" : cameraConfirmed ? `<span class="reality-consent-time">${cameraState.confirmed_at ? escapeHtml(formatDailyReviewTime(cameraState.confirmed_at)) : "已记录"}</span>` : `<button type="button" data-reality-touch-camera-copy>复制摄像头确认命令</button>`}
+        ${cameraEligible && !cameraConfirmed ? `<div class="rt-command"><code>${escapeHtml(cameraCommand)}</code></div>` : ""}
       </section>
-      ${cameraEligible && !cameraConfirmed ? `<div class="reality-command-box"><code>${escapeHtml(cameraCommand)}</code></div>` : ""}
-      <form class="reality-policy-form" data-reality-touch-camera-policy-form>
-        <label class="reality-enable-field">
+      <form class="rt-form rt-subform" data-reality-touch-camera-policy-form>
+        <div class="rt-subform-head"><b>摄像头用户策略</b><span>只对当前选中的主机管理用户生效。</span></div>
+        <label class="rt-switch">
           <input type="checkbox" name="reality_camera_enabled" ${cameraState.enabled ? "checked" : ""} ${cameraEligible && cameraConfirmed ? "" : "disabled"}>
           <span><b>允许该主机管理用户的明确任务读取单帧</b><small>普通私聊用户不能获得此能力；仍受摄像头总开关、读取冷却和任务目的约束。</small></span>
         </label>
-        <label class="reality-field">
-          <span>主动视觉策略</span>
-          <select name="reality_camera_proactive_mode" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>
-            <option value="off" ${String(cameraState.proactive_mode || "off") === "off" ? "selected" : ""}>关闭主动视觉好奇</option>
-            <option value="ask" ${String(cameraState.proactive_mode || "off") === "ask" ? "selected" : ""}>有价值时先自然询问</option>
-            <option value="auto" ${String(cameraState.proactive_mode || "off") === "auto" ? "selected" : ""}>达到强度后可主动单帧</option>
-          </select>
-          <small>低于全局最低档时，auto 会自动降级为 ask。</small>
-        </label>
-        <label class="reality-field">
-          <span>该用户主动单帧日额度</span>
-          <input type="number" name="reality_camera_proactive_max_daily" min="-1" max="10" step="1" value="${Number(cameraState.proactive_max_daily ?? -1)}" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>
-          <small>-1 继承全局，0 禁止直接主动读取。</small>
-        </label>
-        <button type="submit" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>保存摄像头用户策略</button>
+        <div class="rt-grid">
+          <label class="rt-field"><span>主动视觉策略</span>
+            <select name="reality_camera_proactive_mode" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>
+              <option value="off" ${String(cameraState.proactive_mode || "off") === "off" ? "selected" : ""}>关闭主动视觉好奇</option>
+              <option value="ask" ${String(cameraState.proactive_mode || "off") === "ask" ? "selected" : ""}>有价值时先自然询问</option>
+              <option value="auto" ${String(cameraState.proactive_mode || "off") === "auto" ? "selected" : ""}>达到强度后可主动单帧</option>
+            </select>
+            <small>低于全局最低档时，auto 会自动降级为 ask。</small>
+          </label>
+          <label class="rt-field"><span>该用户主动单帧日额度</span>
+            <input type="number" name="reality_camera_proactive_max_daily" min="-1" max="10" step="1" value="${Number(cameraState.proactive_max_daily ?? -1)}" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>
+            <small>-1 继承全局，0 禁止直接主动读取。</small>
+          </label>
+        </div>
+        <div class="rt-actions">
+          <button type="submit" class="rt-btn" ${cameraEligible && cameraConfirmed ? "" : "disabled"}>保存摄像头用户策略</button>
+        </div>
       </form>
-      <form class="reality-policy-form" data-reality-touch-policy-form>
-        <label class="reality-enable-field">
+      <form class="rt-form rt-subform" data-reality-touch-policy-form>
+        <div class="rt-subform-head"><b>主动语音策略</b><span>把 Bot 的主动语音同步到所选现实设备。</span></div>
+        <label class="rt-switch">
           <input type="checkbox" name="reality_proactive_voice" ${user.policy?.proactive_voice_enabled ? "checked" : ""} ${formDisabled}>
           <span><b>将 Bot 的主动语音同步到所选设备</b><small>仅当主动引擎本轮选择 voice 动作时播放；仍受主动频率、免打扰和用户授权约束。</small></span>
         </label>
-        <label class="reality-device-volume compact">
-          <span>主动语音播放音量 <output data-reality-touch-proactive-volume-output>${Number(user.policy?.playback_volume ?? data.audio_output?.playback_volume ?? 35)}%</output></span>
+        <div class="rt-volume">
+          <div class="rt-volume-head">
+            <span>主动语音播放音量</span>
+            <output data-reality-touch-proactive-volume-output>${Number(user.policy?.playback_volume ?? data.audio_output?.playback_volume ?? 35)}%</output>
+          </div>
           <input type="range" name="reality_proactive_volume" data-reality-touch-proactive-volume min="0" max="100" step="1" value="${Number(user.policy?.playback_volume ?? data.audio_output?.playback_volume ?? 35)}" ${formDisabled}>
           <small>仅影响主动陪伴语音同步，不影响闹钟和固定测试音频。</small>
-        </label>
-        <button type="submit" ${formDisabled}>保存主动语音策略</button>
+        </div>
+        <div class="rt-actions">
+          <button type="submit" class="rt-btn" ${formDisabled}>保存主动语音策略</button>
+        </div>
       </form>
-      <div class="reality-scenario-head">
-        <div><span>计划模板</span><h4>起床提醒</h4></div>
-        <small>这是现实触及的一个使用示例，不是该能力的全部用途。</small>
-      </div>
-      <form class="reality-alarm-form" data-reality-touch-form>
-        <div class="reality-form-grid">
-          <label class="reality-field">
-            <span>起床时间</span>
-            <input type="time" name="reality_time" value="${escapeHtml(alarm.time || "07:30")}" ${formDisabled} required>
-          </label>
-          <label class="reality-field">
-            <span>最多触达</span>
+      <form class="rt-form rt-subform" data-reality-touch-form>
+        <div class="rt-subform-head"><b>计划模板 · 起床提醒</b><span>这是现实触及的一个使用示例，不是该能力的全部用途。</span></div>
+        <div class="rt-grid">
+          <label class="rt-field"><span>起床时间</span><input type="time" name="reality_time" value="${escapeHtml(alarm.time || "07:30")}" ${formDisabled} required></label>
+          <label class="rt-field"><span>最多触达</span>
             <select name="reality_repeat_count" ${formDisabled}>
               ${[1, 2, 3, 4, 5, 6].map((count) => `<option value="${count}" ${Number(alarm.repeat_count || 1) === count ? "selected" : ""}>${count} 次</option>`).join("")}
             </select>
           </label>
-          <label class="reality-field">
-            <span>确认等待</span>
-            <input type="number" name="reality_repeat_interval" min="5" max="300" step="5" value="${escapeHtml(String(alarm.repeat_interval_seconds || 20))}" ${formDisabled}>
-            <small>5-300 秒</small>
-          </label>
-          <label class="reality-field">
-            <span>稍后再叫</span>
-            <input type="number" name="reality_snooze_minutes" min="1" max="120" step="1" value="${escapeHtml(String(alarm.snooze_minutes || 10))}" ${formDisabled}>
-            <small>默认分钟数</small>
-          </label>
-          <label class="reality-field">
-            <span>起始音量</span>
-            <input type="number" name="reality_playback_volume" min="0" max="100" step="1" value="${escapeHtml(String(alarm.playback_volume ?? data.audio_output?.playback_volume ?? 35))}" ${formDisabled}>
-            <small>0-100%</small>
-          </label>
-          <label class="reality-field">
-            <span>每轮增量</span>
-            <input type="number" name="reality_volume_step" min="0" max="30" step="1" value="${escapeHtml(String(alarm.volume_step ?? 8))}" ${formDisabled}>
-            <small>每次增加百分比</small>
-          </label>
-          <label class="reality-field">
-            <span>最高音量</span>
-            <input type="number" name="reality_max_volume" min="0" max="100" step="1" value="${escapeHtml(String(alarm.max_volume ?? 70))}" ${formDisabled}>
-            <small>不会超过此值</small>
-          </label>
-          <label class="reality-field">
-            <span>淡入时间</span>
-            <input type="number" name="reality_fade_in_ms" min="0" max="5000" step="100" value="${escapeHtml(String(alarm.fade_in_ms ?? 800))}" ${formDisabled}>
-            <small>毫秒，0 表示关闭</small>
-          </label>
-          <label class="reality-field">
-            <span>聊天触达</span>
+          <label class="rt-field"><span>确认等待（5-300 秒）</span><input type="number" name="reality_repeat_interval" min="5" max="300" step="5" value="${escapeHtml(String(alarm.repeat_interval_seconds || 20))}" ${formDisabled}></label>
+          <label class="rt-field"><span>稍后再叫（分钟）</span><input type="number" name="reality_snooze_minutes" min="1" max="120" step="1" value="${escapeHtml(String(alarm.snooze_minutes || 10))}" ${formDisabled}></label>
+          <label class="rt-field"><span>起始音量（0-100%）</span><input type="number" name="reality_playback_volume" min="0" max="100" step="1" value="${escapeHtml(String(alarm.playback_volume ?? data.audio_output?.playback_volume ?? 35))}" ${formDisabled}></label>
+          <label class="rt-field"><span>每轮增量（%）</span><input type="number" name="reality_volume_step" min="0" max="30" step="1" value="${escapeHtml(String(alarm.volume_step ?? 8))}" ${formDisabled}></label>
+          <label class="rt-field"><span>最高音量（%）</span><input type="number" name="reality_max_volume" min="0" max="100" step="1" value="${escapeHtml(String(alarm.max_volume ?? 70))}" ${formDisabled}></label>
+          <label class="rt-field"><span>淡入时间（毫秒，0 关闭）</span><input type="number" name="reality_fade_in_ms" min="0" max="5000" step="100" value="${escapeHtml(String(alarm.fade_in_ms ?? 800))}" ${formDisabled}></label>
+          <label class="rt-field"><span>聊天触达</span>
             <select name="reality_delivery_mode" ${formDisabled}>
               <option value="chat_on_failure" ${alarm.delivery_mode === "chat_on_failure" ? "selected" : ""}>音频失败时发消息</option>
               <option value="audio_only" ${alarm.delivery_mode === "audio_only" ? "selected" : ""}>仅本机音频</option>
               <option value="audio_and_chat" ${alarm.delivery_mode === "audio_and_chat" ? "selected" : ""}>音频和消息都发送</option>
             </select>
           </label>
-          <label class="reality-enable-field">
-            <input type="checkbox" name="reality_enabled" ${alarm.enabled ? "checked" : ""} ${formDisabled}>
-            <span><b>启用该用户的起床语音</b><small>总开关关闭时保留设置但不会触发</small></span>
+          <label class="rt-field"><span>启用状态</span>
+            <label class="rt-inline-check">
+              <input type="checkbox" name="reality_enabled" ${alarm.enabled ? "checked" : ""} ${formDisabled}>
+              <span>启用该用户的起床语音</span>
+            </label>
+            <small>总开关关闭时保留设置但不会触发。</small>
           </label>
-          <label class="reality-enable-field">
-            <input type="checkbox" name="reality_require_ack" ${alarm.require_acknowledgement !== false ? "checked" : ""} ${formDisabled}>
-            <span><b>等待用户确认醒来</b><small>用户回复“醒了”会停止后续触达，也可要求稍后再叫</small></span>
+          <label class="rt-field"><span>醒来确认</span>
+            <label class="rt-inline-check">
+              <input type="checkbox" name="reality_require_ack" ${alarm.require_acknowledgement !== false ? "checked" : ""} ${formDisabled}>
+              <span>等待用户确认醒来</span>
+            </label>
+            <small>用户回复“醒了”会停止后续触达，也可要求稍后再叫。</small>
           </label>
         </div>
-        <fieldset class="reality-days" ${formDisabled}>
+        <fieldset class="rt-days" ${formDisabled}>
           <legend>重复日期</legend>
           <div>${dayChecks}</div>
         </fieldset>
-        <label class="reality-message-field">
-          <span>叫醒偏好（可选）</span>
+        <label class="rt-field"><span>叫醒偏好（可选）</span>
           <textarea name="reality_message" rows="3" maxlength="240" placeholder="例如：温柔一点，提醒我上午有课" ${formDisabled}>${escapeHtml(alarm.message || "")}</textarea>
           <small>${escapeHtml(data.dynamic_message_hint || "每次触发时按人格、关系与当天语境动态生成")}；这里的内容只作为补充要求，不会固定复读。</small>
         </label>
-        <div class="reality-form-actions">
-          <button type="submit" class="primary" ${formDisabled}>保存起床设置</button>
-          <button type="button" data-reality-touch-test data-reality-touch-test-kind="scenario" ${testDisabled}>生成并试听</button>
-          <button type="button" class="danger soft" data-reality-touch-disable ${alarm.enabled ? "" : "disabled"}>关闭该用户闹钟</button>
+        <div class="rt-actions">
+          <button type="submit" class="rt-btn rt-btn--primary" ${formDisabled}>保存起床设置</button>
+          <button type="button" class="rt-btn" data-reality-touch-test data-reality-touch-test-kind="scenario" ${testDisabled}>生成并试听</button>
+          <button type="button" class="rt-btn rt-btn--danger" data-reality-touch-disable ${alarm.enabled ? "" : "disabled"}>关闭该用户闹钟</button>
         </div>
       </form>
-      <section class="reality-custom-reminders">
-        <div class="reality-scenario-head">
-          <div><span>官方 Cron</span><h4>自定义现实触及提醒</h4></div>
-          <small>在私聊中明确说“用现实触及提醒我……”即可创建；时间由 AstrBot 官方任务管理。</small>
-        </div>
-        ${customReminders.length ? `<div class="reality-reminder-list">${customReminders.map((item) => {
+      <section class="rt-subform">
+        <div class="rt-subform-head"><b>自定义现实触及提醒</b><span>在私聊中明确说“用现实触及提醒我……”即可创建；时间由 AstrBot 官方任务管理。</span></div>
+        ${customReminders.length ? `<div class="rt-reminder-list">${customReminders.map((item) => {
           const active = ["registering", "scheduled", "triggered"].includes(String(item.status || ""));
           const statusText = ({ registering: "登记中", scheduled: "等待触发", triggered: "准备执行", delivering: "正在交付", completed: "已完成", delivery_failed: "交付失败", completed_without_delivery: "未执行", cancelled: "已取消", failed: "登记失败" })[String(item.status || "")] || String(item.status || "未知");
-          return `<div class="reality-reminder-row">
+          return `<div class="rt-reminder-row">
             <div><b>${escapeHtml(item.topic || "未命名提醒")}</b><span>${escapeHtml(item.scheduled_text || "-")} · ${escapeHtml(statusText)} · ${escapeHtml(String(item.playback_volume ?? "-"))}%</span></div>
-            ${active ? `<button type="button" class="danger soft" data-reality-touch-reminder-cancel="${escapeHtml(item.id || "")}">取消</button>` : ""}
+            ${active ? `<button type="button" class="rt-btn rt-btn--danger" data-reality-touch-reminder-cancel="${escapeHtml(item.id || "")}">取消</button>` : ""}
           </div>`;
         }).join("")}</div>` : `<div class="exp-settings-empty">暂无自定义现实触及提醒。</div>`}
       </section>
@@ -35301,19 +35726,23 @@ function renderRealityTouchRuntime() {
     ? "每天"
     : (Array.isArray(alarm.days) ? `周${alarm.days.map((day) => dayLabels[Number(day)]).filter(Boolean).join("、")}` : "-");
   return `
-    <article id="reality-runtime" class="exp-detail-card reality-touch-card reality-runtime-card">
-      <div class="reality-touch-section-head">
-        <div><span>实时摘要</span><h3>运行状态</h3></div>
-        <span class="reality-global-state ${data.global_enabled ? "on" : "off"}">${data.global_enabled ? "总开关已开启" : "总开关已关闭"}</span>
-      </div>
-      <div class="reality-runtime-stats">
+    <article id="reality-runtime" class="exp-detail-card reality-touch-card reality-runtime-card rt-card rt-card--runtime">
+      <header class="rt-card-head">
+        <span class="rt-card-glyph" aria-hidden="true">${RT_ICONS.runtime}</span>
+        <div class="rt-card-copy">
+          <span>实时摘要 · RUNTIME</span>
+          <h3>运行状态</h3>
+        </div>
+        <span class="rt-chip ${data.global_enabled ? "ok" : ""}">${data.global_enabled ? "总开关已开启" : "总开关已关闭"}</span>
+      </header>
+      <div class="rt-runtime-stats">
         <div><span>可配置私聊用户</span><b>${escapeHtml(String(counts.users || 0))}</b></div>
         <div><span>音频已授权</span><b>${escapeHtml(String(counts.consented || 0))}</b></div>
         <div><span>摄像头已授权</span><b>${escapeHtml(String(counts.camera_consented || 0))}</b></div>
         <div><span>待执行提醒</span><b>${escapeHtml(String(Number(counts.scheduled || 0) + Number(counts.custom_scheduled || 0)))}</b></div>
       </div>
       ${user ? `
-        <dl class="reality-runtime-detail">
+        <dl class="rt-kv">
           <div><dt>当前用户</dt><dd>${escapeHtml(user.label || user.user_id || "-")}</dd></div>
           <div><dt>音频授权</dt><dd>${consent.local_audio ? "已授权 local_audio" : "未授权"}</dd></div>
           <div><dt>主动语音</dt><dd>${user.policy?.proactive_voice_enabled ? "同步到现实设备" : "未开放"}</dd></div>
@@ -35328,9 +35757,9 @@ function renderRealityTouchRuntime() {
           <div><dt>本轮触达</dt><dd>${contact.status ? `${escapeHtml(contactStatusText)} · ${escapeHtml(String(contact.attempt || 0))}/${escapeHtml(String(contact.max_attempts || 0))} · ${escapeHtml(String(contact.last_volume || 0))}%` : "暂无会话"}</dd></div>
           <div><dt>最近播放</dt><dd>${playback.at ? `${playback.success ? "成功" : "失败"} · ${escapeHtml(playback.device_name || playback.device_id || "未知设备")} · ${escapeHtml(String(playback.volume ?? "-"))}%${playback.fallback_from ? " · 已回退默认输出" : ""}` : "暂无记录"}</dd></div>
         </dl>
-        ${["pending", "playing", "snoozed"].includes(String(contact.status || "")) ? `<button type="button" class="danger soft" data-reality-touch-stop-session>停止当前这轮触达</button>` : ""}
+        ${["pending", "playing", "snoozed"].includes(String(contact.status || "")) ? `<div class="rt-actions"><button type="button" class="rt-btn rt-btn--danger" data-reality-touch-stop-session>停止当前这轮触达</button></div>` : ""}
       ` : `<div class="exp-settings-empty">暂无用户运行态。</div>`}
-      <div class="reality-boundary-note">
+      <div class="rt-note rt-note--boundary">
         <b>设备边界</b>
         <span>音频由操作系统管理设备连接。摄像头只在明确任务下读取一帧并立即释放，可能发送给已配置视觉模型做有限状态分析，插件默认不保存原图；不做人脸识别、身份比对、情绪读脸、OCR 或后台持续监控。</span>
       </div>
@@ -35926,6 +36355,59 @@ function bindExperimentalOverviewActions() {
 }
 
 function bindRealityTouchActions(root) {
+
+  root.querySelectorAll("[data-reality-capability]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const capability = button.dataset.realityCapability || "";
+      root.querySelectorAll("[data-reality-capability]").forEach((item) => {
+        item.classList.toggle("is-active", item === button);
+      });
+      if (capability === "mobile" || capability === "av") {
+        const targetId = capability === "mobile" ? "reality-connect" : "reality-audio";
+        document.getElementById(targetId)?.scrollIntoView({ behavior: "smooth", block: "start" });
+        return;
+      }
+      const featureKey = capability === "mihome" ? "enable_mihome_integration" : "enable_body_monitor_integration";
+      state.featureDomainFilter = capability === "mihome" ? "米家控制" : "健康检测";
+      state.featureStageFilter = "all";
+      state.featureStatusFilter = "all";
+      switchTab("config");
+      window.setTimeout(() => {
+        if (state.activeTab !== "config") return;
+        renderConfig();
+        const feature = document.querySelector(`[data-feature-key="${featureKey}"]`);
+        (feature || document.getElementById("featureFilterWorkspace"))?.scrollIntoView({ behavior: "smooth", block: "start" });
+      }, 80);
+    });
+  });
+
+  const railItems = Array.from(root.querySelectorAll("[data-rt-jump]"));
+  if (railItems.length) {
+    if (realitySectionObserver) {
+      realitySectionObserver.disconnect();
+      realitySectionObserver = null;
+    }
+    const railTargets = railItems
+      .map((button) => ({ button, target: document.getElementById(button.dataset.rtJump || "") }))
+      .filter((item) => item.target);
+    railTargets.forEach(({ button, target }) => {
+      button.addEventListener("click", () => {
+        target.scrollIntoView({ behavior: "smooth", block: "start" });
+      });
+    });
+    if ("IntersectionObserver" in window) {
+      realitySectionObserver = new IntersectionObserver((entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (!visible) return;
+        railTargets.forEach(({ button, target }) => {
+          button.classList.toggle("is-active", target === visible.target);
+        });
+      }, { rootMargin: "-96px 0px -55% 0px" });
+      railTargets.forEach(({ target }) => realitySectionObserver.observe(target));
+    }
+  }
   root.querySelector("[data-reality-touch-user]")?.addEventListener("change", (event) => {
     state.realityTouchSelectedUserId = event.currentTarget.value || "";
     renderExperimentalPage();
@@ -38224,7 +38706,9 @@ function worldPreviewRows(sectionKey) {
   };
   return [...form.querySelectorAll(selectors[sectionKey] || selectors.persona)]
     .map((control) => {
-      const label = control.closest("label")?.childNodes?.[0]?.textContent?.trim()
+      const labelWrap = control.closest("label");
+      const head = labelWrap?.querySelector?.(":scope > .field-head");
+      const label = (head?.childNodes?.[0] || labelWrap?.childNodes?.[0])?.textContent?.trim()
         || control.dataset.roleplayPersonaPart
         || control.dataset.roleplayWorldPart
         || control.dataset.roleplayUserPart
@@ -38236,12 +38720,156 @@ function worldPreviewRows(sectionKey) {
     .slice(0, 12);
 }
 
+const ROLEPLAY_VISUAL_PART_KEYS = ["appearance", "hair", "eyes", "clothing"];
+const ROLEPLAY_FREEFORM_VISUAL_LABEL_RE = /(^|\n)\s*(识别点|外貌|发型发色|发型|发色|瞳色|眼睛|服饰风格|服装|衣着)\s*[：:]\s*\S/;
+
+function syncRoleplayAppearanceHints() {
+  const standardAlert = document.getElementById("appearanceStandardAlert");
+  if (standardAlert) {
+    const hasVisual = ROLEPLAY_VISUAL_PART_KEYS.some((key) => String(document.querySelector(`[data-roleplay-persona-part="${key}"]`)?.value || "").trim())
+      || Boolean(String(document.querySelector('[data-roleplay-persona-part="gender"]')?.value || "").trim());
+    standardAlert.hidden = hasVisual;
+  }
+  const freeformAlert = document.getElementById("appearanceFreeformAlert");
+  const freeform = document.querySelector('#roleplayProfileForm [name="schedule_persona_prompt"]');
+  if (freeformAlert && freeform) {
+    freeformAlert.hidden = ROLEPLAY_FREEFORM_VISUAL_LABEL_RE.test(freeform.value || "");
+  }
+}
+
+function roleplayVisualPreviewRows() {
+  const rows = [["gender", "性别"], ...ROLEPLAY_VISUAL_PART_KEYS.map((key) => [key, { appearance: "识别点", hair: "发型发色", eyes: "瞳色", clothing: "服饰风格" }[key]])]
+    .map(([key, label]) => {
+      const value = String(document.querySelector(`[data-roleplay-persona-part="${key}"]`)?.value || "").trim();
+      return value ? [label, value] : null;
+    })
+    .filter(Boolean);
+  const hint = String(document.querySelector('#roleplayProfileForm [name="private_image_self_recognition_hint"]')?.value || "").trim();
+  if (hint) rows.push(["特殊图像身份线索", hint]);
+  return rows;
+}
+
+const ROLEPLAY_BIRTHDAY_CN_DIGITS = { "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9 };
+const ROLEPLAY_BIRTHDAY_CN_MONTHS = { "正": 1, "冬": 11, "腊": 12 };
+
+function roleplayBirthdayChineseMonth(token) {
+  if (!token) return 0;
+  if (Object.prototype.hasOwnProperty.call(ROLEPLAY_BIRTHDAY_CN_MONTHS, token)) return ROLEPLAY_BIRTHDAY_CN_MONTHS[token];
+  if (token === "十一") return 11;
+  if (token === "十二") return 12;
+  if (token.length === 1 && Object.prototype.hasOwnProperty.call(ROLEPLAY_BIRTHDAY_CN_DIGITS, token)) return ROLEPLAY_BIRTHDAY_CN_DIGITS[token];
+  return 0;
+}
+
+function roleplayBirthdayChineseDay(token) {
+  if (!token) return 0;
+  if (token.startsWith("初")) {
+    const digit = token.length > 1 ? (ROLEPLAY_BIRTHDAY_CN_DIGITS[token[1]] || 0) : 1;
+    return digit >= 1 && digit <= 10 ? digit : 0;
+  }
+  if (token.startsWith("廿")) {
+    const digit = token.length > 1 ? (ROLEPLAY_BIRTHDAY_CN_DIGITS[token[1]] || 0) : 0;
+    const day = 20 + digit;
+    return day >= 20 && day <= 29 ? day : 0;
+  }
+  if (token === "十") return 10;
+  if (token === "二十") return 20;
+  if (token === "三十") return 30;
+  if (token.includes("十")) {
+    const [left, right] = token.split("十");
+    if (left && !Object.prototype.hasOwnProperty.call(ROLEPLAY_BIRTHDAY_CN_DIGITS, left)) return 0;
+    if (right && !Object.prototype.hasOwnProperty.call(ROLEPLAY_BIRTHDAY_CN_DIGITS, right)) return 0;
+    const day = (left ? ROLEPLAY_BIRTHDAY_CN_DIGITS[left] : 1) * 10 + (right ? ROLEPLAY_BIRTHDAY_CN_DIGITS[right] : 0);
+    return day >= 11 && day <= 31 ? day : 0;
+  }
+  if (token.length === 1 && Object.prototype.hasOwnProperty.call(ROLEPLAY_BIRTHDAY_CN_DIGITS, token)) return ROLEPLAY_BIRTHDAY_CN_DIGITS[token];
+  return 0;
+}
+
+function parseRoleplayBirthdayText(raw) {
+  const text = String(raw || "").replace(/\s+/g, "");
+  if (!text) return null;
+  const lunarHint = /农历|阴历/.test(text);
+  const solarHint = /公历|阳历|新历/.test(text);
+  const calendarOf = (strongLunar) => (solarHint && !lunarHint ? "solar" : (lunarHint || strongLunar) ? "lunar" : "solar");
+  const arabic = text.match(/(?:(?:19|20)\d{2}年)?(\d{1,2})月(\d{1,2})(?:日|号)?/) || text.match(/(?:\d{2,4}年)?(\d{1,2})[-/.](\d{1,2})/);
+  if (arabic) {
+    const month = Number(arabic[1]);
+    const day = Number(arabic[2]);
+    const calendar = calendarOf(false);
+    if (month >= 1 && month <= 12 && day >= 1 && day <= (calendar === "lunar" ? 30 : 31)) {
+      return { calendar, month, day };
+    }
+  }
+  const chinese = text.match(/([正月腊冬一二三四五六七八九十]{1,2})月(初[一二三四五六七八九十]?|二十[一二三四五六七八九]?|廿[一二三四五六七八九]?|三十|十[一二三四五六七八九]?|[一二三四五六七八九])(?:日|号)?/);
+  if (chinese) {
+    const month = roleplayBirthdayChineseMonth(chinese[1]);
+    const day = roleplayBirthdayChineseDay(chinese[2]);
+    if (month && day) {
+      const strongLunar = "正冬腊".includes(chinese[1][0]) || chinese[2].startsWith("初") || chinese[2].startsWith("廿");
+      const calendar = calendarOf(strongLunar);
+      if (day <= (calendar === "lunar" ? 30 : 31)) return { calendar, month, day };
+    }
+  }
+  return null;
+}
+
+function roleplayBirthdayNextDays(profile) {
+  if (!profile || profile.calendar !== "solar") return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (let offset = 0; offset <= 366; offset += 1) {
+    const candidate = new Date(today.getFullYear(), today.getMonth(), today.getDate() + offset);
+    if (candidate.getMonth() + 1 === profile.month && candidate.getDate() === profile.day) return offset;
+  }
+  return null;
+}
+
+function syncRoleplayBirthdayHints() {
+  document.querySelectorAll("[data-birthday-hint]").forEach((hint) => {
+    const control = hint.dataset.birthdayHint === "user"
+      ? document.querySelector('[data-roleplay-user-part="user_age"]')
+      : document.querySelector('[data-roleplay-persona-part="age"]');
+    const value = String(control?.value || "").trim();
+    if (!value) {
+      hint.textContent = "";
+      hint.classList.remove("is-ok", "is-weak");
+      return;
+    }
+    const parsed = parseRoleplayBirthdayText(value);
+    hint.classList.toggle("is-ok", Boolean(parsed));
+    hint.classList.toggle("is-weak", !parsed);
+    if (!parsed) {
+      hint.textContent = "未识别为具体日期，将仅作为背景资料。";
+      return;
+    }
+    if (parsed.calendar === "lunar") {
+      hint.textContent = `已识别：农历 ${parsed.month} 月 ${parsed.day} 日 · 每年按当年农历自动匹配。`;
+      return;
+    }
+    const days = roleplayBirthdayNextDays(parsed);
+    const untilText = days == null ? "" : days === 0 ? " · 就是今天" : ` · 距下次生日约 ${days} 天`;
+    hint.textContent = `已识别：公历 ${parsed.month} 月 ${parsed.day} 日${untilText}。`;
+  });
+}
+
 function renderWorldPreview(sectionKey = "persona") {
   const output = $("#worldPreviewContent");
   if (!output) return;
   const rows = worldPreviewRows(sectionKey);
-  output.innerHTML = rows.length
-    ? `<dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`
+  const visualBlock = sectionKey === "persona"
+    ? (() => {
+        const visualRows = roleplayVisualPreviewRows();
+        return `<div class="world-preview-visual${visualRows.length ? "" : " is-empty"}">
+          <b>识图将读取的外观标签</b>
+          ${visualRows.length
+            ? `<dl>${visualRows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`
+            : "<span>尚未填写外貌字段；识图与每日穿搭生图将缺少角色外观。</span>"}
+        </div>`;
+      })()
+    : "";
+  output.innerHTML = rows.length || visualBlock
+    ? `${visualBlock}<dl>${rows.map(([label, value]) => `<dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd>`).join("")}</dl>`
     : `<div class="world-preview-empty">当前章节还没有可预览的内容。</div>`;
 }
 
@@ -38276,6 +38904,8 @@ $("#roleplayProfileForm")?.addEventListener("input", (event) => {
   if (event.target instanceof HTMLTextAreaElement) resizeRoleplayTextarea(event.target);
   const status = $("#worldSaveState");
   if (status) status.textContent = "有未保存修改";
+  syncRoleplayAppearanceHints();
+  syncRoleplayBirthdayHints();
   if ($("#worldPreview")?.classList.contains("is-open")) {
     renderWorldPreview(document.querySelector("[data-world-section].is-active")?.dataset.worldSection || "persona");
   }

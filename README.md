@@ -748,6 +748,24 @@ API 提供：
 - 为 Proactive Chat 执行预检、复核、发送结算和取消。
 - 为历史聊天导入解析稳定身份，并暂存/回滚关系观察。
 - 接收幂等的结构化游戏事件，让人格决定胜负余韵、连胜连败上限与持续时间。
+- 内置米家服务，负责认证、设备目录、实时状态、场景和基础属性控制；不依赖 `astrbot_plugin_mihome` 的 Python 模块。
+
+现实触及扩展接口：
+
+~~~python
+api.register_reality_touch_provider({
+    "name": "mihome",
+    "label": "米家",
+    "owner": "astrbot_plugin_mihome",
+    "list_scenes": list_scenes,
+    "run_scene": run_scene,
+    "get_health_summary": get_health_summary,
+})
+~~~
+
+`run_scene` 和 `control_device` 由现实触及扩展再次校验主要用户/管理员资格，并要求显式 `confirmed=True`。内置服务从旧版 `plugin_data/astrbot_plugin_mihome/auth.json` 和 `state.json` 自动迁移到本体的独立目录；新链路不会 import 原插件代码，也不会读取原插件实例。可用配置为 `mihome_scene_allowlist`、`mihome_device_map`。
+
+现实触及提供统一的模型入口 `pc_reality_touch_action`。用户可以直接说“帮我执行晚安场景”“把客厅灯打开”“看看空气净化器状态”，模型会读取本体设备/场景目录，再选择具体动作；普通“晚安”“我要睡了”等没有控制意图的表达不会触发设备操作。管理员仍可用 `米家登录`、`米家状态`、`米家登出` 管理本体凭证。
 
 注册外部主动能力示例：
 

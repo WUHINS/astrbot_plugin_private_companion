@@ -3045,8 +3045,9 @@ class PrivateImageMixin:
             if not self._can_run_llm_task(provider_id, task=clean_task_name):
                 self._record_llm_budget_skip(provider_id=provider_id, task=clean_task_name, prompt=prompt)
                 continue
+            start = time.time()
+            attempt_timeout = 0.0
             try:
-                start = time.time()
                 token_skip_getter = getattr(self, "_model_token_limit_should_skip_primary", None)
                 if callable(token_skip_getter) and token_skip_getter(
                     task=clean_task_name,
@@ -5622,6 +5623,8 @@ class PrivateImageMixin:
                 req.model = selected_model.strip()
             previous_selected_provider = ""
             selected_provider_changed = False
+            reply = ""
+            reply_source = "main_chain"
             if direct_image_mode:
                 req.image_urls = list(request_image_refs)
             await self.inject_humanized_state(framework_event, req)
@@ -5742,7 +5745,7 @@ class PrivateImageMixin:
             runner = getattr(result, "agent_runner", None) if result else None
             if llm_resp is None:
                 llm_resp = runner.get_final_llm_resp() if runner else None
-            if "reply" not in locals():
+            if not reply:
                 reply = self._private_image_framework_response_text(llm_resp)
                 if reply and not str(getattr(llm_resp, "completion_text", "") or "").strip():
                     logger.info(
@@ -5750,7 +5753,7 @@ class PrivateImageMixin:
                         user_id,
                         _single_line(reply, 180),
                     )
-            if "reply_source" not in locals():
+            if not reply_source:
                 reply_source = "main_chain"
             reply = self._restore_private_image_framework_tts_reply(
                 reply,

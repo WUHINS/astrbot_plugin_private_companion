@@ -71,6 +71,7 @@ except Exception:
     Converter = None
     Solar = None
 
+from .birthday_support import parse_birthday_text, parse_relative_birthday_days
 from .constants import (
     DEFAULT_DAILY_PLAN_ITEMS,
     DEFAULT_HUMANIZED_STATE,
@@ -3343,6 +3344,33 @@ class UserMemoryMixin:
         weight = min(5, 1 + score + (2 if explicit else 0))
         return {"keep": True, "kind": kind, "weight": weight, "reason": "explicit" if explicit else "rule_match"}
 
+    def _parse_user_birthday_from_message(self, text: str, *, require_birthday_token: bool = True) -> dict | None:
+        """从用户消息解析生日；支持月日/农历/中文数字，以及“过两天生日”这类相对说法。"""
+        parsed = parse_birthday_text(text)
+        if parsed:
+            return {
+                "calendar": parsed["calendar"],
+                "month": parsed["month"],
+                "day": parsed["day"],
+                "raw": parsed["raw"],
+                "source": "user_explicit",
+            }
+        days = parse_relative_birthday_days(text, require_birthday_token=require_birthday_token)
+        if days is None:
+            return None
+        try:
+            target = (self._environment_now() + timedelta(days=days)).date()
+        except Exception:
+            target = (datetime.now().astimezone() + timedelta(days=days)).date()
+        return {
+            "calendar": "solar",
+            "month": target.month,
+            "day": target.day,
+            "raw": _single_line(text, 60),
+            "source": "user_explicit_relative",
+            "relative_days": days,
+        }
+
     def _update_companion_memory_from_message(self, user: dict[str, Any], text: str) -> None:
         if not self.enable_companion_memory:
             return
@@ -3355,17 +3383,15 @@ class UserMemoryMixin:
             user["birthday_curiosity_opt_out"] = True
             user["birthday_curiosity_asked_at"] = 0
         else:
-            birthday_match = re.search(r"(?:(农历|公历)\s*)?(\d{1,2})\s*(?:月|[-./])\s*(\d{1,2})\s*(?:日|号)?", cleaned)
             explicit_birthday = bool(re.search(r"(?:我|我的|本人).{0,6}生日(?:.{0,10}(?:是|在|：|:))?", cleaned))
-            if birthday_match and (asked_recently or explicit_birthday):
-                user["birthday_profile"] = {
-                    "calendar": "lunar" if birthday_match.group(1) == "农历" else "solar",
-                    "month": int(birthday_match.group(2)),
-                    "day": int(birthday_match.group(3)),
-                    "raw": birthday_match.group(0),
-                    "source": "birthday_curiosity_reply" if asked_recently else "user_explicit",
-                    "confirmed_at": _now_ts(),
-                }
+            birthday_update = self._parse_user_birthday_from_message(
+                cleaned,
+                require_birthday_token=not asked_recently,
+            )
+            if birthday_update and (asked_recently or explicit_birthday):
+                birthday_update["source"] = "birthday_curiosity_reply" if asked_recently else str(birthday_update.get("source") or "user_explicit")
+                birthday_update["confirmed_at"] = _now_ts()
+                user["birthday_profile"] = birthday_update
                 if asked_recently:
                     user["birthday_curiosity_answered_at"] = _now_ts()
                     user["birthday_curiosity_asked_at"] = 0
@@ -9292,6 +9318,7 @@ bot_promises 只记录 Bot 明确承诺要提醒、记住、转述、发送或�
                         }
                     )
                 del current_loops[:-12]
+            current_scope_context = None
             if expression_rules:
                 current_scope_managed, current_scope_context = self._expression_formal_scope_for_owner(
                     current, source_kind="private",

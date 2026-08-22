@@ -41,7 +41,7 @@ from .relationship_policy import normalize_relationship_stage_policy
 from .runtime_compat import probe_runtime_capabilities
 from .migration_coordinator import MigrationCoordinator
 from .migration_outbox import MigrationOutbox
-from .model_routing import DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS, build_rules, normalize_scope
+from .model_routing import build_rules, normalize_scope
 from .segmented_message import normalize_component_order, normalize_component_strategy
 from .unified_person_registry import UnifiedPersonRegistry
 
@@ -162,6 +162,16 @@ def initialize_plugin_entrypoint_state(
 
 def initialize_plugin_config(self: Any, config: Any) -> None:
     c = config
+    # Built-in MiHome integration is opt-in at the scene/device boundary.
+    self.enable_mihome_integration = self._cfg_bool(c, "enable_mihome_integration", False)
+    self.mihome_scene_allowlist = self._cfg_raw(c, "mihome_scene_allowlist", [])
+    self.mihome_device_map = self._cfg_raw(c, "mihome_device_map", {})
+    self.mihome_allow_direct_device_control = self._cfg_bool(c, "mihome_allow_direct_device_control", False)
+    self.mihome_require_explicit_confirmation = self._cfg_bool(c, "mihome_require_explicit_confirmation", True)
+    self.mihome_read_state_enabled = self._cfg_bool(c, "mihome_read_state_enabled", True)
+    self.health_detection_mode = self._cfg_str(c, "health_detection_mode", "events_and_proactive", "events_and_proactive")
+    if self.health_detection_mode not in {"off", "events_only", "events_and_proactive"}:
+        self.health_detection_mode = "events_and_proactive"
     _initialize_core_and_relationship_config(self, c)
     _initialize_world_and_model_config(self, c)
     _initialize_proactive_and_reaction_config(self, c)
@@ -550,12 +560,12 @@ def _initialize_world_and_model_config(self: Any, c: Any) -> None:
     self.sensitive_replacement_keywords = self._cfg_str(
         c,
         "sensitive_replacement_keywords",
-        "；".join(DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS),
+        "",
     )
     self.deepseek_peak_replacement_provider_id = self._cfg_str(c, "DEEPSEEK_PEAK_REPLACEMENT_PROVIDER_ID", "")
     self.deepseek_peak_windows = self._cfg_str(c, "deepseek_peak_windows", "09:00-12:00\n14:00-18:00")
     self.deepseek_peak_timezone = self._cfg_str(c, "deepseek_peak_timezone", "Asia/Shanghai", "Asia/Shanghai")
-    self.deepseek_peak_match_keywords = self._cfg_str(c, "deepseek_peak_match_keywords", "deepseek,深度求索")
+    self.deepseek_peak_match_keywords = self._cfg_str(c, "deepseek_peak_match_keywords", "")
     self._deepseek_peak_last_log_key = ""
     _page_font = str(self._cfg_raw(c, "page_font_family", "original") or "original").strip().lower()
     self.page_font_family = _page_font if _page_font in PAGE_FONT_NAMES else "original"

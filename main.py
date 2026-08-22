@@ -399,6 +399,7 @@ from .command_handlers import CommandHandlersMixin
 from .tts_enhancement import TtsEnhancementMixin
 from .tts_tool_sanitizer import TtsToolSanitizerMixin
 from .reality_companion_bridge import RealityCompanionBridgeMixin
+from .mihome_integration import MiHomeIntegration
 from .planning import (
     build_daily_plan_prompt,
     build_detail_enhancement_prompt,
@@ -469,6 +470,36 @@ class PrivateCompanionExtensionAPI:
 
     def unregister_proactive_ability(self, name: str) -> bool:
         return self._plugin.unregister_external_proactive_ability(name)
+
+    def register_reality_touch_provider(self, spec: dict[str, Any]) -> bool:
+        """Register safe external scene/health callbacks for reality touch."""
+        register = getattr(self._plugin, "register_reality_touch_provider", None)
+        return bool(callable(register) and register(spec))
+
+    def unregister_reality_touch_provider(self, name: str) -> bool:
+        unregister = getattr(self._plugin, "unregister_reality_touch_provider", None)
+        return bool(callable(unregister) and unregister(name))
+
+    def list_reality_touch_providers(self) -> list[dict[str, Any]]:
+        getter = getattr(self._plugin, "list_reality_touch_providers", None)
+        return getter() if callable(getter) else []
+
+    async def call_reality_touch_provider(
+        self,
+        provider: str,
+        operation: str,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        caller = getattr(self._plugin, "call_reality_touch_provider", None)
+        if not callable(caller):
+            return {"ok": False, "reason": "provider_bridge_unavailable"}
+        return await caller(provider, operation, payload)
+
+    async def resolve_reality_touch_request(self, user_id: str, request: str) -> dict[str, Any]:
+        resolver = getattr(self._plugin, "resolve_reality_touch_request", None)
+        if not callable(resolver):
+            return {"ok": False, "reason": "reality_touch_planner_unavailable"}
+        return await resolver(user_id, request)
 
     def list_proactive_abilities(self) -> list[dict[str, Any]]:
         return self._plugin.external_proactive_abilities()
@@ -3144,6 +3175,11 @@ class PrivateCompanionPlugin(
         initialize_plugin_config(self, config)
         initialize_plugin_runtime(self)
         initialize_plugin_post_runtime_state(self, config)
+        try:
+            self.mihome_integration = MiHomeIntegration(self)
+        except Exception as exc:
+            self.mihome_integration = None
+            logger.warning("[PrivateCompanion] 内置米家服务初始化失败: %s", _single_line(exc, 180))
         self.req041_observability = Req041Observability()
         self._req041_runtime_boot_ref = f"boot-{id(self)}"
 
@@ -6987,6 +7023,10 @@ class PrivateCompanionPlugin(
     async def terminate(self):
         global _private_companion_plugin
         self._stop_event.set()
+        mihome = getattr(self, "mihome_integration", None)
+        closer = getattr(mihome, "close", None)
+        if callable(closer):
+            await closer()
         standalone_webui = getattr(self, "standalone_webui", None)
         if standalone_webui is not None:
             try:
@@ -9791,9 +9831,11 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 if not chunk:
                     continue
                 sent_index += 1
+                # The exception fallback below may run before preview or any
+                # normalization succeeds, so keep the original chunk available.
+                outbound_chunk = list(chunk)
                 try:
                     preview = self._segmented_chunk_log_text(chunk)
-                    outbound_chunk = chunk
                     drift_reason = self._segmented_remainder_context_drift_reason(
                         event,
                         previous_text=prev,
@@ -16839,6 +16881,92 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
         cache[signature] = now
         return False
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("米家登录")
+    async def builtin_mihome_login(self, event: AstrMessageEvent):
+        service = getattr(self, "mihome_integration", None)
+        if service is None:
+            yield event.plain_result("内置米家服务不可用，请检查 mijiaAPI 依赖。")
+            return
+        yield event.plain_result("正在准备米家登录二维码，请稍候……")
+
+        async def qr_callback(url: str):
+            await event.send(event.plain_result(f"请使用米家 App 扫码授权：\n\n{url}"))
+
+        result = await service.login(qr_callback)
+        status = result.get("status")
+        messages = {
+            "success": "米家授权成功。",
+            "already_logged_in": "米家已经处于登录状态。",
+            "in_progress": "米家登录流程正在进行中。",
+            "timeout": "米家登录二维码已超时。",
+            "unavailable": "米家依赖不可用。",
+        }
+        yield event.plain_result(messages.get(status, f"米家登录失败：{_single_line(result.get('message'), 180)}"))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("米家状态")
+    async def builtin_mihome_status(self, event: AstrMessageEvent):
+        service = getattr(self, "mihome_integration", None)
+        status = service.status() if service is not None else {"available": False}
+        yield event.plain_result(
+            "内置米家服务状态：\n"
+            f"- 依赖可用：{bool(status.get('available'))}\n"
+            f"- 已有凭证：{bool(status.get('auth_exists'))}\n"
+            f"- 登录中：{bool(status.get('login_in_progress'))}\n"
+            f"- 最近错误：{_single_line(status.get('last_error'), 180) or '无'}"
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("米家场景列表")
+    async def builtin_mihome_scene_list(self, event: AstrMessageEvent):
+        service = getattr(self, "mihome_integration", None)
+        if service is None:
+            yield event.plain_result("内置米家服务不可用。")
+            return
+        result = await service.list_scenes({"include_unlisted": True})
+        scenes = result.get("scenes", []) if isinstance(result, dict) else []
+        if not scenes:
+            yield event.plain_result("没有读取到米家场景，请先确认已登录且米家 App 中存在场景。")
+            return
+        lines = ["米家场景（仅查看，未执行）："]
+        lines.extend(
+            f"{index}. {item.get('scene_name', '')} | scene_id={item.get('scene_id', '')}"
+            for index, item in enumerate(scenes, 1)
+        )
+        lines.append("请将要允许模型执行的名称或 ID 填入 mihome_scene_allowlist。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("米家设备列表")
+    async def builtin_mihome_device_list(self, event: AstrMessageEvent):
+        service = getattr(self, "mihome_integration", None)
+        if service is None:
+            yield event.plain_result("内置米家服务不可用。")
+            return
+        result = await service.list_devices({"include_unmapped": True})
+        devices = result.get("devices", []) if isinstance(result, dict) else []
+        if not devices:
+            yield event.plain_result("没有读取到米家设备，请先确认已登录且米家设备在线。")
+            return
+        lines = ["米家设备（仅查看，未控制）："]
+        lines.extend(
+            f"{index}. {item.get('name', '')} | did={item.get('did', '')} | model={item.get('model', '')}"
+            for index, item in enumerate(devices, 1)
+        )
+        lines.append("请在 mihome_device_map 中填写 JSON，例如：{\"客厅灯\": \"上面的 DID\"}。")
+        yield event.plain_result("\n".join(lines))
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("米家登出")
+    async def builtin_mihome_logout(self, event: AstrMessageEvent):
+        service = getattr(self, "mihome_integration", None)
+        if service is None:
+            yield event.plain_result("内置米家服务不可用。")
+            return
+        await service.logout()
+        yield event.plain_result("内置米家凭证和缓存已清除。")
+
     @filter.command("陪伴", alias={"私聊陪伴", "主动陪伴"})
     @_multi_persona_event_context
     async def companion_command(self, event: AstrMessageEvent):
@@ -17697,7 +17825,11 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                         user = users.get(user_id) if isinstance(users, dict) else None
                         if isinstance(user, dict):
                             user.pop("reality_touch_pending_consent", None)
-                            self._save_data_sync(sections={"users"})
+                            try:
+                                self._save_data_sync(sections={"users"})
+                            except TypeError:
+                                # Keep compatibility with lightweight hosts and older stores.
+                                self._save_data_sync()
                     confirmation_reply = "主机摄像头只允许 AstrBot 管理员或主要用户本人授权和使用。"
             elif isinstance(user, dict) and isinstance(
                 user.get("reality_touch_pending_consent"), dict

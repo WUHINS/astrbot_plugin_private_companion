@@ -320,6 +320,39 @@ class IncrementalPersistenceCallsiteTests(unittest.TestCase):
         self.assertIn("updated_rules", source)
         self.assertIn("expression_voice_profile", source)
 
+    def test_private_pipeline_initializes_optional_text_locals(self) -> None:
+        handler = _private_handler()
+        initializations = {
+            target.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Assign)
+            and isinstance(node.value, ast.Constant)
+            and node.value.value == ""
+            for target in node.targets
+            if isinstance(target, ast.Name)
+        }
+        annotated_initializations = {
+            node.target.id
+            for node in ast.walk(handler)
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "expression_feedback"
+        }
+        self.assertIn("safe_text", initializations)
+        self.assertIn("expression_feedback", annotated_initializations)
+        safe_text_line = next(
+            node.lineno
+            for node in ast.walk(handler)
+            if isinstance(node, ast.Assign)
+            and any(isinstance(target, ast.Name) and target.id == "safe_text" for target in node.targets)
+        )
+        first_text_branch_line = min(
+            node.lineno
+            for node in ast.walk(handler)
+            if isinstance(node, ast.If) and ast.unparse(node.test) == "text"
+        )
+        self.assertLess(safe_text_line, first_text_branch_line)
+
     def test_private_pipeline_saves_smart_state_at_early_and_final_commit_points(
         self,
     ) -> None:

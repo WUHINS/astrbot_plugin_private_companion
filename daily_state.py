@@ -13679,33 +13679,17 @@ class DailyStateMixin(DailyStateTickMixin):
         segment = self._current_detail_segment_for_update()
         enhanced = self.data.get("detail_enhanced_segments", {})
         detail_snapshot = None
+        roleplay_state_names = {
+            "情绪", "心情", "体力", "精力", "能量", "心理能量", "睡眠", "睡意",
+            "梦境", "健康", "身体", "饥饿", "饥饿感", "胃口", "周期", "生理期",
+            "等待回复", "等回复", "是否等待回复",
+        }
         if isinstance(segment, dict) and isinstance(enhanced, dict):
             detail_snapshot = enhanced.get(str(segment.get("key") or ""))
         if isinstance(detail_snapshot, dict):
             state_variables = detail_snapshot.get("state_variables", [])
             if isinstance(state_variables, list) and state_variables:
                 variable_texts = []
-                roleplay_state_names = {
-                    "情绪",
-                    "心情",
-                    "体力",
-                    "精力",
-                    "能量",
-                    "心理能量",
-                    "睡眠",
-                    "睡意",
-                    "梦境",
-                    "健康",
-                    "身体",
-                    "饥饿",
-                    "饥饿感",
-                    "胃口",
-                    "周期",
-                    "生理期",
-                    "等待回复",
-                    "等回复",
-                    "是否等待回复",
-                }
 
                 def _natural_detail_variable(name: str, value: str, note: str = "") -> str:
                     text = f"{name}是{value}"
@@ -16647,7 +16631,9 @@ class DailyStateMixin(DailyStateTickMixin):
             item.strip().lower()
             for item in re.split(r"[,，;；\n]+", str(getattr(self, "deepseek_peak_match_keywords", "") or ""))
             if item.strip()
-        ] or ["deepseek", "深度求索"]
+        ]
+        if not keywords:
+            return False
         haystack = " ".join(parts).lower()
         return any(keyword in haystack for keyword in keywords)
 

@@ -1033,8 +1033,10 @@ class ForwardMessageMixin:
                 self._record_llm_budget_skip(provider_id=provider_id, task="forward_message_image_vision", prompt=prompt)
                 skipped_providers.append(f"{provider_source}:budget")
                 continue
+            start = time.time()
+            timeout = 0.0
+            timeout_source = "unknown"
             try:
-                start = time.time()
                 token_skip_getter = getattr(self, "_model_token_limit_should_skip_primary", None)
                 if callable(token_skip_getter) and token_skip_getter(
                     task="forward_message_image_vision",

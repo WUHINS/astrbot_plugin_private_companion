@@ -16,20 +16,9 @@ CURRENT_MODEL_REPLACEMENT_SOURCES: ContextVar[tuple[tuple[str, str], ...]] = Con
     default=(),
 )
 
-DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS = (
-    "很抱歉，我无法",
-    "很抱歉,我无法",
-    "我有我自己的底线",
-    "我们可以聊聊别的",
-    "我无法满足",
-    "露骨性行为",
-    "没办法提交这个请求",
-    "这个请求没办法提交",
-    "The prompt could not be submitted",
-    "prompt could not be submitted",
-    "The request could not be submitted",
-    "request could not be submitted",
-)
+# Matching is intentionally configuration-only. Provider wording changes over
+# time, and hard-coded phrases made an opt-in replacement silently active.
+DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,10 +218,7 @@ def contains_sensitive_refusal(text: Any, keywords: Any = None) -> str:
     cleaned = re.sub(r"\s+", "", str(text or "")).casefold()
     if not cleaned:
         return ""
-    # Custom terms extend the built-in high-confidence provider refusal terms.
-    # Keeping the built-ins active prevents an older saved custom list from
-    # disabling detection for newly observed provider error wording.
-    candidates = tuple(dict.fromkeys((*DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS, *normalize_keywords(keywords))))
+    candidates = normalize_keywords(keywords)
     for keyword in candidates:
         compact = re.sub(r"\s+", "", keyword).casefold()
         if compact and compact in cleaned:

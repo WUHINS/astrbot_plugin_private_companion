@@ -522,6 +522,7 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                     confirmation_token, expected_confirmation
                 ):
                     return self._error("身份状态已变化，请刷新后重新预览")
+                raw_result: dict[str, Any] = {}
                 if dry_run:
                     summary_reader = getattr(registry, "safe_admin_person_summary", None)
                     summary = summary_reader(person_id, subject) if callable(summary_reader) else {}
@@ -801,6 +802,7 @@ class PrivateCompanionPageApiUsersGroupsMixin:
                     if private_memory_revision is None:
                         return self._error("权威私聊记忆暂不可写，请稍后重试")
                 expression_voice_needs_refresh = False
+                normalized_relationship_prompt = ""
                 previous_role = self.plugin._private_user_role(user, user_id)
                 previous_mode = normalize_relationship_mode(user.get("relationship_mode"), previous_role)
                 role = previous_role

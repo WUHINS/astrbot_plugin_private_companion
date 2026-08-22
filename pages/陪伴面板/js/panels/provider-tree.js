@@ -522,38 +522,142 @@ window.PrivateCompanionProviderTree = (() => {
     };
   }
 
+  const MODEL_RULE_MATCH_OPTIONS = [
+    ["contains", "包含关键词"],
+    ["exact", "完全一致"],
+    ["regex", "正则表达式"],
+  ];
+  const MODEL_RULE_LOGIC_OPTIONS = [
+    ["any", "任一命中"],
+    ["all", "全部命中"],
+  ];
+  const MODEL_RULE_KEYWORD_SPLIT_RE = /[,，;；、\n]+/;
+
+  function parseModelRuleKeywords(text) {
+    const seen = [];
+    String(text || "").split(MODEL_RULE_KEYWORD_SPLIT_RE).forEach((item) => {
+      const value = item.trim();
+      if (value && !seen.includes(value) && seen.length < 40) seen.push(value);
+    });
+    return seen;
+  }
+
+  function modelRuleProviderControl(context, value, index) {
+    const { state, escapeHtml } = context;
+    const known = state.availableProviders.some((item) => item.id === value);
+    const options = [
+      `<option value="">请选择替代 Provider</option>`,
+      ...state.availableProviders.map((item) => {
+        const label = `${item.name || item.id}${item.model ? ` · ${item.model}` : ""}${item.is_default ? " · 默认" : ""}`;
+        return `<option value="${escapeHtml(item.id)}" ${item.id === value ? "selected" : ""}>${escapeHtml(label)}</option>`;
+      }),
+      `<option value="__custom__" ${value && !known ? "selected" : ""}>手动输入 Provider ID</option>`,
+    ].join("");
+    return `
+      <select data-model-rule-provider-select="${index}">${options}</select>
+      <input data-model-rule-provider-input="${index}" value="${escapeHtml(value || "")}" placeholder="自定义 Provider ID" ${value && !known ? "" : "hidden"} />
+    `;
+  }
+
+  function renderModelRuleRow(context, rule, index) {
+    const { escapeHtml } = context;
+    const enabled = rule.enabled !== false;
+    const matchMode = MODEL_RULE_MATCH_OPTIONS.some(([value]) => value === rule.match_mode) ? rule.match_mode : "contains";
+    const keywordLogic = MODEL_RULE_LOGIC_OPTIONS.some(([value]) => value === rule.keyword_logic) ? rule.keyword_logic : "any";
+    const keywordsText = Array.isArray(rule.keywords) ? rule.keywords.join("\n") : "";
+    const providerId = String(rule.provider_id || "").trim();
+    const incomplete = !providerId || !keywordsText.trim();
+    return `
+      <article class="model-rule ${enabled ? "" : "is-disabled"}" data-model-rule-index="${index}" data-model-rule-model="${escapeHtml(String(rule.model || ""))}">
+        <header class="model-rule-head">
+          <label class="model-replacement-toggle model-rule-toggle" title="停用后保留配置，但不参与匹配">
+            <input type="checkbox" data-model-rule-enabled="${index}" ${enabled ? "checked" : ""} />
+            <span class="model-replacement-toggle-track" aria-hidden="true"></span>
+            <b>${enabled ? "启用" : "停用"}</b>
+          </label>
+          <input class="model-rule-name" data-model-rule-name="${index}" value="${escapeHtml(String(rule.name || ""))}" placeholder="规则名称，例如：代码问题" maxlength="120" />
+          <button type="button" class="model-rule-remove" data-model-rule-remove="${index}">删除</button>
+        </header>
+        <div class="model-rule-grid">
+          <label class="provider-field"><span>替代模型 <small>命中后改用这个 Provider</small></span>
+            ${modelRuleProviderControl(context, providerId, index)}
+          </label>
+          <label class="provider-field"><span>触发关键词 <small>每行一个，或用分号 / 顿号分隔</small></span>
+            <textarea rows="2" data-model-rule-keywords="${index}" placeholder="写代码&#10;debug；报错">${escapeHtml(keywordsText)}</textarea>
+          </label>
+        </div>
+        <div class="model-rule-opts">
+          <label class="model-rule-opt"><span>匹配方式</span>
+            <select data-model-rule-match="${index}">
+              ${MODEL_RULE_MATCH_OPTIONS.map(([value, label]) => `<option value="${value}" ${matchMode === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <label class="model-rule-opt"><span>关键词关系</span>
+            <select data-model-rule-logic="${index}" ${matchMode === "exact" ? "disabled" : ""} title="完全一致模式下按整体匹配，不区分关键词关系">
+              ${MODEL_RULE_LOGIC_OPTIONS.map(([value, label]) => `<option value="${value}" ${keywordLogic === value ? "selected" : ""}>${label}</option>`).join("")}
+            </select>
+          </label>
+          <label class="model-rule-check" title="勾选后英文大小写不同视为不同关键词">
+            <input type="checkbox" data-model-rule-case="${index}" ${rule.case_sensitive ? "checked" : ""} />
+            <span>区分大小写</span>
+          </label>
+          <label class="model-rule-opt model-rule-priority"><span>优先级 <small>越大越先匹配</small></span>
+            <input type="number" step="1" data-model-rule-priority="${index}" value="${escapeHtml(String(Number.isFinite(rule.priority) ? rule.priority : 0))}" />
+          </label>
+        </div>
+        ${incomplete ? `<div class="model-rule-warn">还没有选择替代模型，或关键词为空；这样保存后该规则不会参与匹配。</div>` : ""}
+      </article>
+    `;
+  }
+
+  function collectModelRules(context) {
+    const { document } = context;
+    return [...document.querySelectorAll("[data-model-rule-index]")].map((card) => {
+      const index = card.dataset.modelRuleIndex;
+      const select = card.querySelector(`[data-model-rule-provider-select="${index}"]`);
+      const input = card.querySelector(`[data-model-rule-provider-input="${index}"]`);
+      const custom = select?.value === "__custom__";
+      const providerId = custom ? String(input?.value || "").trim() : String(select?.value || "").trim();
+      const priorityRaw = Number(card.querySelector(`[data-model-rule-priority="${index}"]`)?.value);
+      return {
+        name: String(card.querySelector(`[data-model-rule-name="${index}"]`)?.value || "").trim(),
+        enabled: Boolean(card.querySelector(`[data-model-rule-enabled="${index}"]`)?.checked),
+        priority: Number.isFinite(priorityRaw) ? Math.round(priorityRaw) : 0,
+        keywords: parseModelRuleKeywords(card.querySelector(`[data-model-rule-keywords="${index}"]`)?.value || ""),
+        match_mode: String(card.querySelector(`[data-model-rule-match="${index}"]`)?.value || "contains"),
+        keyword_logic: String(card.querySelector(`[data-model-rule-logic="${index}"]`)?.value || "any"),
+        case_sensitive: Boolean(card.querySelector(`[data-model-rule-case="${index}"]`)?.checked),
+        provider_id: providerId,
+        model: String(card.dataset.modelRuleModel || "").trim(),
+      };
+    });
+  }
+
   function currentModelReplacementValues(context) {
     const { document } = context;
     const defaults = modelReplacementValuesForRender(context);
     const scope = document.querySelector("[data-model-replacement-scope]");
-    const rules = document.querySelector("[data-model-replacement-rules]");
     const sensitiveEnabled = document.querySelector("[data-sensitive-replacement-enabled]");
     const sensitiveProvider = document.querySelector("[data-sensitive-replacement-provider-input]");
     const sensitiveKeywords = document.querySelector("[data-sensitive-replacement-keywords]");
-    let parsedRules = defaults.rules;
-    if (rules) {
-      try {
-        const candidate = JSON.parse(rules.value || "[]");
-        if (Array.isArray(candidate)) parsedRules = candidate;
-      } catch (_error) {
-        // Keep the last valid value until the user fixes the JSON.
-      }
-    }
     return {
       scope: scope?.value || defaults.scope,
-      rules: parsedRules,
+      rules: document.querySelector("[data-model-rule-index]") ? collectModelRules(context) : defaults.rules,
       sensitiveEnabled: sensitiveEnabled ? sensitiveEnabled.checked : defaults.sensitiveEnabled,
       sensitiveProvider: sensitiveProvider ? sensitiveProvider.value.trim() : defaults.sensitiveProvider,
       sensitiveKeywords: sensitiveKeywords ? sensitiveKeywords.value.trim() : defaults.sensitiveKeywords,
     };
   }
 
-  function renderModelReplacementCard(context) {
+  function renderModelReplacementCard(context, overrideRules) {
     const { document, escapeHtml } = context;
     const root = document.getElementById("modelReplacementCard");
     if (!root) return;
     const values = modelReplacementValuesForRender(context);
-    const rulesText = JSON.stringify(values.rules, null, 2);
+    const rules = Array.isArray(overrideRules) ? overrideRules : values.rules;
+    const ruleRows = rules.length
+      ? rules.map((rule, index) => renderModelRuleRow(context, rule, index)).join("")
+      : `<div class="model-rule-empty">还没有关键词换模规则；点击“新增规则”创建第一条，命中关键词时改用指定模型。</div>`;
     root.innerHTML = `
       <article class="model-replacement-card ${values.sensitiveEnabled ? "enabled" : ""}">
         <div class="model-replacement-head">
@@ -571,10 +675,13 @@ window.PrivateCompanionProviderTree = (() => {
           </label>
         </div>
         <div class="model-replacement-body">
-          <label class="provider-field model-replacement-rules-field">
-            <span class="model-replacement-field-label"><b>关键词换模规则</b><small>JSON 数组 · 支持 contains / exact / regex、优先级、任一/全部关键词</small></span>
-            <textarea rows="9" data-model-replacement-rules spellcheck="false" placeholder="[{\"name\":\"代码问题\",\"keywords\":[\"写代码\"],\"provider_id\":\"替代模型\"}]">${escapeHtml(rulesText)}</textarea>
-          </label>
+          <section class="model-replacement-rules">
+            <div class="model-replacement-rules-head">
+              <span class="model-replacement-field-label"><b>关键词换模规则</b><small>消息命中关键词时改用指定模型；多条规则按优先级从高到低匹配</small></span>
+              <button type="button" class="model-rule-add" data-model-rule-add>＋ 新增规则</button>
+            </div>
+            <div class="model-rule-list">${ruleRows}</div>
+          </section>
           <section class="model-replacement-sensitive">
             <div class="model-replacement-sensitive-head">
               <div>
@@ -614,6 +721,53 @@ window.PrivateCompanionProviderTree = (() => {
       input.hidden = !custom;
       if (!custom) input.value = select.value;
       if (custom) input.focus();
+    });
+    root.querySelectorAll("[data-model-rule-provider-select]").forEach((ruleSelect) => {
+      ruleSelect.addEventListener("change", () => {
+        const index = ruleSelect.dataset.modelRuleProviderSelect;
+        const ruleInput = root.querySelector(`[data-model-rule-provider-input="${index}"]`);
+        if (!ruleInput) return;
+        const custom = ruleSelect.value === "__custom__";
+        ruleInput.hidden = !custom;
+        if (!custom) ruleInput.value = ruleSelect.value;
+        if (custom) ruleInput.focus();
+      });
+    });
+    root.querySelectorAll("[data-model-rule-match]").forEach((matchSelect) => {
+      matchSelect.addEventListener("change", () => {
+        const index = matchSelect.dataset.modelRuleMatch;
+        const logicSelect = root.querySelector(`[data-model-rule-logic="${index}"]`);
+        if (logicSelect) logicSelect.disabled = matchSelect.value === "exact";
+      });
+    });
+    root.querySelectorAll("[data-model-rule-enabled]").forEach((ruleToggle) => {
+      ruleToggle.addEventListener("change", () => {
+        const card = ruleToggle.closest(".model-rule");
+        card?.classList.toggle("is-disabled", !ruleToggle.checked);
+        const label = ruleToggle.closest(".model-rule-toggle")?.querySelector("b");
+        if (label) label.textContent = ruleToggle.checked ? "启用" : "停用";
+      });
+    });
+    root.querySelector("[data-model-rule-add]")?.addEventListener("click", () => {
+      renderModelReplacementCard(context, [...collectModelRules(context), {
+        name: "",
+        enabled: true,
+        priority: 0,
+        keywords: [],
+        match_mode: "contains",
+        keyword_logic: "any",
+        case_sensitive: false,
+        provider_id: "",
+        model: "",
+      }]);
+      root.querySelector(".model-rule:last-child [data-model-rule-name]")?.focus();
+    });
+    root.querySelectorAll("[data-model-rule-remove]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const index = Number(button.dataset.modelRuleRemove);
+        const next = collectModelRules(context).filter((_rule, position) => position !== index);
+        renderModelReplacementCard(context, next);
+      });
     });
   }
 

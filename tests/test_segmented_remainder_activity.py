@@ -111,6 +111,32 @@ class SegmentedRemainderActivityTests(unittest.IsolatedAsyncioTestCase):
             [result.chain[0].text for result in event.sent],
         )
 
+    async def test_remainder_exception_fallback_keeps_original_chunk_available(self) -> None:
+        plugin = self._build_remainder_harness()
+        event = _RemainderEvent()
+        plugin._build_result_from_chain = lambda chain: SimpleNamespace(chain=list(chain))
+        calls = 0
+
+        def flaky_preview(chunk):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise RuntimeError("preview failed")
+            return "".join(str(getattr(item, "text", "") or "") for item in chunk)
+
+        plugin._segmented_chunk_log_text = flaky_preview
+
+        await PrivateCompanionPlugin._send_segmented_llm_chain_remainder(
+            plugin,
+            event,
+            [[Plain("第二段。")]],
+            previous_segment="第一段。",
+            source="decorating_result",
+            started_at=1.0,
+        )
+
+        self.assertEqual(["第二段。"], [result.chain[0].text for result in event.sent])
+
     async def test_regular_remainder_is_not_stopped_by_new_activity(self) -> None:
         plugin = self._build_remainder_harness()
         event = _RemainderEvent()

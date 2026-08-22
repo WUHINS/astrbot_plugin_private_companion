@@ -837,6 +837,8 @@ class LlmToolActionsMixin:
                     '- 最小标签格式为 `<pc_reaction_expression>{"purpose":"轻吐槽","emotion":"无语","intensity":2}</pc_reaction_expression>`。',
                     "- `purpose` 写沟通用途，`emotion` 写希望传达的情绪，`intensity` 为 0-5；需要帮助检索时可选填 `candidate_queries`，提供 1-3 个简短说法。不要填写图片路径。",
                     "- 每轮最多写一个标签，必须放在全部可见文字和 TTS 标签之后；不要使用 Markdown 代码块，不要解释标签，也不要调用图片或生图工具。",
+                    "- 表情标签只描述情绪和检索意图，不改变正文的语言、事实或回复对象；普通可见正文继续使用当前对话语言。",
+                    "- TTS 配置的目标语种只作用于语音块/voice_text；除非用户本轮明确要求外语文字，否则不要把日语或英语朗读稿写入标签外的可见正文，也不要为了表情标签重复生成一段外语正文。",
                     "- 即使图库最终没有匹配、图片重复或发送失败，前面的完整文字也必须仍然自然成立。",
                 ]
             ).strip()
@@ -6706,6 +6708,7 @@ class LlmToolActionsMixin:
         lookup_started = time.perf_counter()
         cache_hit = False
         lookup_error_type = ""
+        cache_key = ""
         lookup = dict(owned_lookup) if isinstance(owned_lookup, dict) else None
         if lookup is None:
             lookup_revision = self._reaction_expression_lookup_cache_revision(library)

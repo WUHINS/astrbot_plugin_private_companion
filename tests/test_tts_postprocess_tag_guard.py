@@ -1151,6 +1151,50 @@ class TtsPostprocessTagGuardTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("今天早点休息吧。", event.result.chain[0].text)
         harness._translate_tts_spoken_to_chinese.assert_awaited_once()
 
+    async def test_deferred_reaction_tts_drops_unwrapped_foreign_prefix_before_segmenting(self):
+        harness = _TtsHarness()
+        harness.enabled = True
+        harness.tts_generation_mode = "postprocess"
+        harness.tts_voice_language = "ja"
+        harness.tts_foreign_text_mode = "translation"
+        harness._maybe_convert_plain_reply_to_tts = AsyncMock(return_value=[])
+        harness._build_result_from_chain = lambda chain: SimpleNamespace(chain=list(chain))
+
+        class Event:
+            unified_msg_origin = "test-session"
+            _private_companion_tts_request_applied = True
+            _private_companion_reaction_expression_intent = {"emotion": "担心"}
+            message_str = "减肥"
+
+            def __init__(self):
+                self.result = SimpleNamespace(
+                    chain=[
+                        Plain(
+                            "[concerned]えっ…ダイエット？夜ご飯食べないなんて、体に悪いよ。"
+                            "唔，减肥就不吃晚饭了吗？比折大人这样肚子会饿坏的啦。"
+                        )
+                    ]
+                )
+
+            def get_result(self):
+                return self.result
+
+            def set_result(self, value):
+                self.result = value
+
+        event = Event()
+        await harness.apply_tts_enhancement_before_send(event)
+
+        self.assertEqual(
+            "唔，减肥就不吃晚饭了吗？比折大人这样肚子会饿坏的啦。",
+            event.result.chain[0].text,
+        )
+        self.assertEqual(
+            "[concerned]えっ…ダイエット？夜ご飯食べないなんて、体に悪いよ。"
+            "唔，减肥就不吃晚饭了吗？比折大人这样肚子会饿坏的啦。",
+            event._private_companion_deferred_reaction_tts["normalized"],
+        )
+
     async def test_postprocess_keeps_explicit_foreign_text_reply(self):
         harness = _TtsHarness()
         harness.enabled = True

@@ -2114,15 +2114,16 @@ class TtsEnhancementMixin:
         return _single_line("\n".join(parts), 800)
 
     def _tts_unwrapped_foreign_translation_fallback(self, text: str, event: Any = None) -> str:
-        """Recover the visible Chinese half of an unwrapped fast-tag reply.
+        """Recover the visible Chinese half of an unwrapped TTS reply.
 
-        Fast-tag replies reserve foreign text for ``<pc_tts>``. A few models
+        TTS replies reserve foreign text for ``<pc_tts>`` or postprocess voice
+        text. A few models
         occasionally omit the wrapper but still emit the prescribed
         "foreign speech + Chinese display text" layout. Restrict recovery to
         that exact shape so ordinary Chinese replies with a foreign word, and
         user-requested foreign text, remain untouched.
         """
-        if getattr(self, "tts_generation_mode", "fast_tag") != "fast_tag":
+        if getattr(self, "tts_generation_mode", "fast_tag") not in {"fast_tag", "postprocess"}:
             return ""
         if self._tts_voice_language_for_event(event) == "zh":
             return ""
@@ -2133,7 +2134,15 @@ class TtsEnhancementMixin:
         cleaned = self._sanitize_tts_visible_text(text, max_chars=1600)
         if not cleaned or re.search(r"</?(?:pc[_-]?tts|t{2,}s)\b", cleaned, flags=re.IGNORECASE):
             return ""
-        first_visible = re.search(r"[^\s\[\(（\"'“‘]", cleaned)
+        # Emotion-capable providers may prefix an unwrapped draft with a short
+        # marker such as ``[concerned]``. It is metadata, not visible language,
+        # so ignore it when checking whether the foreign portion comes first.
+        language_probe = re.sub(
+            r"^\s*(?:\[[^\]\r\n]{1,40}\]\s*)+",
+            "",
+            cleaned,
+        )
+        first_visible = re.search(r"[^\s\[\(（\"'“‘]", language_probe)
         if first_visible is None or not re.match(r"[\u3040-\u30ff\u31f0-\u31ff]", first_visible.group(0)):
             return ""
         kana_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff]", cleaned))
@@ -2947,6 +2956,23 @@ TTS 朗读文本：
                 text,
                 event=event,
             ) or self._tts_plain_markup_fallback_text(normalized)
+            # Reaction-expression replies defer voice generation until after the
+            # visible text and image are delivered. In postprocess mode this
+            # branch used to bypass the normal unwrapped-foreign recovery,
+            # allowing a Japanese voice draft to leak into visible segments.
+            # Recover the Chinese display half before segmentation while keeping
+            # the original normalized text for the later voice conversion.
+            visible_foreign_fallback = self._tts_unwrapped_foreign_translation_fallback(
+                visible_text,
+                event,
+            )
+            if visible_foreign_fallback:
+                visible_text = visible_foreign_fallback
+                logger.warning(
+                    "[PrivateCompanion] 表情表达可见正文已移除未包装外语朗读稿: session=%s preview=%s",
+                    _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
+                    _single_line(visible_text, 160),
+                )
             visible_text = self._sanitize_tts_visible_text(
                 visible_text,
                 max_chars=self._tts_complete_text_limit(visible_text, 1600),

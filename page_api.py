@@ -748,6 +748,13 @@ class PrivateCompanionPageApi(
             ("/group/member-safety", self.get_group_member_safety, ["GET"], "Private Companion Page group member safety"),
             ("/group/member-safety/action", self.update_group_member_safety, ["POST"], "Private Companion Page update group member safety"),
             ("/settings/update", self.update_settings, ["POST"], "Private Companion Page update settings"),
+            ("/mihome/status", self.get_mihome_status, ["GET"], "Private Companion Page MiHome status"),
+            ("/mihome/login", self.start_mihome_login, ["POST"], "Private Companion Page start MiHome QR login"),
+            ("/mihome/scenes", self.list_mihome_scenes, ["POST"], "Private Companion Page MiHome scenes"),
+            ("/mihome/scene/run", self.run_mihome_scene, ["POST"], "Private Companion Page run MiHome scene"),
+            ("/mihome/devices", self.list_mihome_devices, ["POST"], "Private Companion Page MiHome devices"),
+            ("/mihome/device/state", self.get_mihome_device_state, ["POST"], "Private Companion Page MiHome device state"),
+            ("/mihome/logout", self.logout_mihome, ["POST"], "Private Companion Page MiHome logout"),
             ("/reality-touch", self.get_reality_touch, ["GET"], "Private Companion Page reality touch status"),
             ("/reality-touch/update", self.update_reality_touch, ["POST"], "Private Companion Page update reality touch alarm"),
             ("/settings/swap_image_api", self.swap_image_api_settings, ["POST"], "Private Companion Page swap image API settings"),
@@ -1185,6 +1192,8 @@ class PrivateCompanionPageApi(
                 "proactive_only": section("proactive_only", self._proactive_only_mode_snapshot, {}),
                 "proactive_chat": section("proactive_chat", lambda: self._proactive_chat_summary(data), {}),
                 "body_monitor_integration": section("body_monitor_integration", self._body_monitor_integration_summary, {}),
+                "mihome": section("mihome", self._mihome_integration_summary, {}),
+                "health_detection": section("health_detection", self._health_detection_summary, {}),
                 "expression_scope": section("expression_scope", lambda: self._expression_learning_scope_summary(data), {}),
                 "providers": section("providers", self._provider_settings, {}),
                 "settings": section("settings", self._runtime_settings, {}),
@@ -2249,6 +2258,7 @@ class PrivateCompanionPageApi(
             started = time.time()
             result: Any = None
             completion = ""
+            timeout = 0.0
             try:
                 timeout_getter = getattr(self.plugin, "_private_image_provider_timeout_seconds", None)
                 timeout = float(timeout_getter(provider_id, provider_source)) if callable(timeout_getter) else 30.0
@@ -4749,6 +4759,101 @@ class PrivateCompanionPageApi(
             "现实触及已由“我会来到你身边”管理，请先安装并启用 astrbot_plugin_reality_companion。",
             status_code=503,
         )
+
+    def _mihome_page_service(self) -> Any:
+        return getattr(self.plugin, "mihome_integration", None)
+
+    async def get_mihome_status(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        try:
+            return self._ok(service.status())
+        except Exception as exc:
+            logger.warning("[PrivateCompanionPage] 读取米家状态失败: %s", self._single_line(exc, 160))
+            return self._exception_error("读取米家状态失败")
+
+    async def start_mihome_login(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        try:
+            status = await service.start_login()
+            return self._ok(status)
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 启动米家扫码登录失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("启动米家扫码登录失败")
+
+    async def list_mihome_scenes(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        try:
+            result = await service.list_scenes({"include_unlisted": True})
+            if not isinstance(result, dict):
+                return self._error("读取米家场景失败")
+            if not result.get("ok"):
+                return self._error(result.get("message") or "读取米家场景失败")
+            return self._ok(result)
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 读取米家场景失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("读取米家场景失败")
+
+    async def list_mihome_devices(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        try:
+            result = await service.list_devices({"include_unmapped": True})
+            if not isinstance(result, dict):
+                return self._error("读取米家设备失败")
+            if not result.get("ok"):
+                return self._error(result.get("message") or "读取米家设备失败")
+            return self._ok(result)
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 读取米家设备失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("读取米家设备失败")
+
+    async def run_mihome_scene(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        payload = await request.get_json(silent=True) or {}
+        try:
+            result = await service.run_scene(payload if isinstance(payload, dict) else {})
+            if not isinstance(result, dict) or not result.get("ok"):
+                message = result.get("message") if isinstance(result, dict) else ""
+                return self._error(message or "执行米家场景失败")
+            return self._ok(result)
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 执行米家场景失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("执行米家场景失败")
+
+    async def get_mihome_device_state(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        payload = await request.get_json(silent=True) or {}
+        try:
+            result = await service.get_device_state(payload if isinstance(payload, dict) else {})
+            if not isinstance(result, dict) or not result.get("ok"):
+                message = result.get("message") if isinstance(result, dict) else ""
+                return self._error(message or "读取米家设备状态失败")
+            return self._ok(result)
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 读取米家设备状态失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("读取米家设备状态失败")
+
+    async def logout_mihome(self) -> dict[str, Any]:
+        service = self._mihome_page_service()
+        if service is None:
+            return self._error("内置米家服务不可用，请检查 mijiaAPI 依赖。", status_code=503)
+        try:
+            removed = await service.logout()
+            return self._ok({"removed": bool(removed), "status": service.status()})
+        except Exception as exc:
+            logger.error("[PrivateCompanionPage] 米家退出授权失败: %s", self._single_line(exc, 200), exc_info=True)
+            return self._exception_error("米家退出授权失败")
 
     async def update_settings(self) -> dict[str, Any]:
         payload = await request.get_json(silent=True) or {}
@@ -12958,6 +13063,7 @@ class PrivateCompanionPageApi(
         try:
             items = await self._roleplay_persona_items()
             enabled = bool(getattr(self.plugin, "enable_multi_persona_mode", False))
+            configured_ids: list[str] = []
             if enabled:
                 configured_ids = getattr(self.plugin, "_persona_profile_ids", lambda: [])()
                 known = {str(item.get("id") or "") for item in items if isinstance(item, dict)}
@@ -17256,6 +17362,7 @@ class PrivateCompanionPageApi(
                 if target is None:
                     return self._error("请选择有效的导入目标")
                 managed, scope_context = self._expression_admin_scope_context(source_type, source_id, target)
+                prepared: dict[str, Any] = {}
                 if managed:
                     prepared = self._expression_prepare_admin_profile(target, scope_context)
                     expected_revision = self._int(payload.get("expected_scope_revision"))
@@ -19079,6 +19186,66 @@ class PrivateCompanionPageApi(
             "error": self._body_monitor_status_error(raw.get("last_error") or raw.get("error")),
         }
 
+    def _mihome_integration_summary(self) -> dict[str, Any]:
+        service = getattr(self.plugin, "mihome_integration", None)
+        getter = getattr(service, "status", None)
+        raw: dict[str, Any] = {}
+        if callable(getter):
+            try:
+                value = getter()
+                raw = value if isinstance(value, dict) else {}
+            except Exception as exc:
+                raw = {"last_error": str(exc)}
+        enabled = bool(getattr(self.plugin, "enable_mihome_integration", False))
+        available = bool(raw.get("available"))
+        if not enabled:
+            state = "disabled"
+            state_text = "内置米家已关闭"
+        elif not available:
+            state = "dependency_missing"
+            state_text = "缺少 mijiaAPI"
+        elif raw.get("login_in_progress"):
+            state = "login_in_progress"
+            state_text = "等待米家授权"
+        elif raw.get("auth_exists"):
+            state = "ready"
+            state_text = "已授权，可按白名单使用"
+        else:
+            state = "unauthorized"
+            state_text = "尚未授权"
+        allowlist_getter = getattr(service, "_config_list", None)
+        try:
+            scene_allowlist = allowlist_getter("mihome_scene_allowlist") if callable(allowlist_getter) else []
+        except Exception:
+            scene_allowlist = []
+        return {
+            **raw,
+            "enabled": enabled,
+            "available": available,
+            "state": state,
+            "state_text": state_text,
+            "scene_allowlist": scene_allowlist[:100],
+            "device_map": dict(getattr(self.plugin, "mihome_device_map", {}) or {}) if isinstance(getattr(self.plugin, "mihome_device_map", {}), dict) else {},
+            "require_explicit_confirmation": bool(getattr(self.plugin, "mihome_require_explicit_confirmation", True)),
+            "error": self._single_line(raw.get("last_error"), 240),
+        }
+
+    def _health_detection_summary(self) -> dict[str, Any]:
+        mode = str(getattr(self.plugin, "health_detection_mode", "events_and_proactive") or "events_and_proactive")
+        body = self._body_monitor_integration_summary()
+        source = "Body Monitor"
+        return {
+            "enabled": mode != "off" and bool(body.get("enabled")),
+            "mode": mode,
+            "mode_text": {"off": "关闭", "events_only": "仅接收健康事件", "events_and_proactive": "接收事件并允许主动关心"}.get(mode, "接收事件并允许主动关心"),
+            "source": source,
+            "source_available": bool(body.get("installed")) and body.get("state") == "connected",
+            "authorized": bool(body.get("enabled")),
+            "last_sync": body.get("last_pull_text", ""),
+            "last_error": body.get("error", ""),
+            "proactive_enabled": mode == "events_and_proactive",
+        }
+
     def _feature_flags(self) -> dict[str, bool]:
         keys = [
             "enable_proactive_only_mode",
@@ -19193,6 +19360,7 @@ class PrivateCompanionPageApi(
             "enable_ai_daily_watch",
             "enable_external_event_self_link",
             "enable_body_monitor_integration",
+            "enable_mihome_integration",
             "enable_web_exploration",
             "enable_web_exploration_boredom_search",
             "enable_qzone_integration",
@@ -21203,6 +21371,13 @@ class PrivateCompanionPageApi(
             "sensitive_replacement_keywords",
             "enable_deepseek_peak_replacement",
             "enable_body_monitor_integration",
+            "enable_mihome_integration",
+            "mihome_scene_allowlist",
+            "mihome_device_map",
+            "mihome_allow_direct_device_control",
+            "mihome_require_explicit_confirmation",
+            "mihome_read_state_enabled",
+            "health_detection_mode",
             "deepseek_peak_windows",
             "deepseek_peak_timezone",
             "deepseek_peak_match_keywords",
@@ -23418,6 +23593,20 @@ class PrivateCompanionPageApi(
             setattr(self.plugin, key, normalized)
             return
         self._set_config_value(key, value)
+        if key in {
+            "enable_mihome_integration",
+            "mihome_allow_direct_device_control",
+            "mihome_require_explicit_confirmation",
+            "mihome_read_state_enabled",
+            "health_detection_mode",
+            "mihome_scene_allowlist",
+            "mihome_device_map",
+        }:
+            if key == "health_detection_mode":
+                setattr(self.plugin, key, str(value or "events_and_proactive"))
+            else:
+                setattr(self.plugin, key, value)
+            return
         if key == "enable_body_monitor_integration":
             enabled = self._normalize_bool_value(value)
             self.plugin.enable_body_monitor_integration = enabled

@@ -790,6 +790,7 @@ async def handle_private_message(self: Any, event: Any, *args: Any, **kwargs: An
         self._note_morning_greeting_reply(user, now=received_ts or _now_ts())
         private_memory_managed = False
         private_memory_revision = None
+        safe_text = ""
         if text:
             user["inbound_count"] = _safe_int(user.get("inbound_count"), 0) + 1
         self._apply_relationship_event(
@@ -840,6 +841,9 @@ async def handle_private_message(self: Any, event: Any, *args: Any, **kwargs: An
         user["ignored_streak"] = 0
         user["friend_unanswered_silenced_since"] = 0
         user["friend_unanswered_silence_note"] = ""
+        # Feedback is optional for empty/filtered messages, but the persistence
+        # section below is shared by every private-message path.
+        expression_feedback: dict[str, Any] = {}
         if text:
             safe_text = self._sanitize_orphan_tts_placeholders(text)
             user["last_user_message"] = safe_text or text

@@ -1482,6 +1482,58 @@
     "default": false,
     "invisible": true
   },
+  "enable_mihome_integration": {
+    "description": "内置米家控制",
+    "type": "bool",
+    "default": false,
+    "hint": "开启本体内置米家服务。需要先使用“米家登录”完成授权；关闭时模型不会读取或控制米家设备。",
+    "invisible": true
+  },
+  "mihome_scene_allowlist": {
+    "description": "米家允许执行的场景",
+    "type": "list",
+    "default": [],
+    "hint": "每行填写场景名称或场景 ID。留空表示不向模型暴露任何可执行场景。",
+    "invisible": true
+  },
+  "mihome_device_map": {
+    "description": "米家设备别名映射",
+    "type": "object",
+    "default": {},
+    "items": {},
+    "hint": "JSON 格式，例如 {\"客厅灯\": \"设备 DID\"}。只有配置别名的设备才会提供给模型。",
+    "invisible": true
+  },
+  "mihome_allow_direct_device_control": {
+    "description": "允许米家设备直接写入",
+    "type": "bool",
+    "default": false,
+    "hint": "默认只读状态和执行白名单场景；开启后才允许模型修改已配置设备属性。",
+    "invisible": true
+  },
+  "mihome_require_explicit_confirmation": {
+    "description": "米家设备写入要求明确确认",
+    "type": "bool",
+    "default": true,
+    "hint": "设备写入前要求用户明确确认，避免模型误触发。",
+    "invisible": true
+  },
+  "mihome_read_state_enabled": {
+    "description": "允许读取米家设备状态",
+    "type": "bool",
+    "default": true,
+    "hint": "只影响状态查询，不会打开设备写入权限。",
+    "invisible": true
+  },
+  "health_detection_mode": {
+    "description": "健康检测处理模式",
+    "type": "string",
+    "options": ["off", "events_only", "events_and_proactive"],
+    "labels": ["关闭", "仅接收事件", "接收事件并允许主动关心"],
+    "default": "events_and_proactive",
+    "hint": "当前数据源为 Body Monitor。仅接收事件模式会同步并记录健康事件，但不会生成主动消息。",
+    "invisible": true
+  },
   "proactive_chat_bridge_review_mode": {
     "description": "Legacy flat config: Proactive Chat 联动复核模式",
     "type": "string",
@@ -4996,8 +5048,8 @@
       "sensitive_replacement_keywords": {
         "description": "敏感拒答匹配词",
         "type": "text",
-        "hint": "每行或用分号分隔。内置高置信度词会始终保留；默认包含中文拒答、提交失败及英文 Provider 错误提示。",
-        "default": "很抱歉，我无法；很抱歉,我无法；我有我自己的底线；我们可以聊聊别的；我无法满足；露骨性行为；没办法提交这个请求；这个请求没办法提交；The prompt could not be submitted；prompt could not be submitted；The request could not be submitted；request could not be submitted",
+        "hint": "每行或用分号分隔。仅匹配你明确配置的词；留空则不会按关键词触发模型替换。",
+        "default": "",
         "condition": {
           "enable_sensitive_model_replacement": true
         }
@@ -5024,8 +5076,8 @@
       "deepseek_peak_match_keywords": {
         "description": "DeepSeek Provider 匹配关键词",
         "type": "text",
-        "hint": "用于匹配 Provider ID、名称、模型名、类型和 API Base；每行或逗号分隔。",
-        "default": "deepseek,深度求索"
+        "hint": "用于匹配 Provider ID、名称、模型名、类型和 API Base；每行或逗号分隔。留空则不启用关键词匹配。",
+        "default": ""
       },
       "EMBEDDING_PROVIDER_ID": {
         "description": "通用语义嵌入模型",

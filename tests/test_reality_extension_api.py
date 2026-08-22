@@ -8,7 +8,7 @@ from astrbot_plugin_private_companion.main import PrivateCompanionExtensionAPI, 
 from astrbot_plugin_private_companion.reality_companion_bridge import RealityCompanionBridgeMixin
 
 
-class _Host:
+class _Host(RealityCompanionBridgeMixin):
     admin_user_ids = ["admin-1"]
 
     def __init__(self) -> None:
@@ -52,6 +52,72 @@ def test_reality_extension_api_forwards_mobile_location_updates() -> None:
     result = asyncio.run(api.notify_mobile_location_update("target-1"))
 
     assert result == {"handled": True}
+
+
+def test_reality_provider_api_keeps_callbacks_bounded_and_isolated() -> None:
+    host = _Host()
+
+    async def run_scene(payload: dict) -> dict:
+        return {"ok": True, "scene_id": payload.get("scene_id")}
+
+    api = PrivateCompanionExtensionAPI(host)
+    assert api.register_reality_touch_provider({
+        "name": "mihome",
+        "label": "米家",
+        "run_scene": run_scene,
+        "owner": "astrbot_plugin_mihome",
+    }) is True
+    assert api.list_reality_touch_providers() == [{
+        "name": "mihome",
+        "label": "米家",
+        "capabilities": ["run_scene"],
+        "owner": "astrbot_plugin_mihome",
+    }]
+    result = asyncio.run(api.call_reality_touch_provider("mihome", "run_scene", {"scene_id": "s1", "confirmed": True}))
+    assert result == {"ok": True, "scene_id": "s1"}
+    assert api.unregister_reality_touch_provider("mihome") is True
+
+
+def test_reality_provider_api_rejects_unbounded_registration() -> None:
+    api = PrivateCompanionExtensionAPI(_Host())
+    assert api.register_reality_touch_provider({"name": "bad/name", "run_scene": lambda _: {}}) is False
+    assert asyncio.run(api.call_reality_touch_provider("missing", "run_scene", {}))["ok"] is False
+
+
+def test_model_planner_can_select_only_catalogued_scene() -> None:
+    class Host(_Host):
+        async def _llm_call(self, _prompt: str, **_kwargs) -> str:
+            return '{"provider":"mihome","operation":"run_scene","scene_name":"晚安"}'
+
+    async def list_scenes(_payload: dict) -> dict:
+        return {"ok": True, "scenes": [{"scene_id": "scene-1", "scene_name": "晚安"}]}
+
+    async def run_scene(payload: dict) -> dict:
+        return {"ok": True, "scene_name": payload.get("scene_name")}
+
+    host = Host()
+    api = PrivateCompanionExtensionAPI(host)
+    api.register_reality_touch_provider({"name": "mihome", "list_scenes": list_scenes, "run_scene": run_scene})
+
+    result = asyncio.run(api.resolve_reality_touch_request("target-1", "帮我执行晚安场景"))
+
+    assert result["ok"] is True
+    assert result["operation"] == "run_scene"
+    assert result["scene_name"] == "晚安"
+
+
+def test_model_planner_does_not_operate_for_greeting() -> None:
+    class Host(_Host):
+        async def _llm_call(self, _prompt: str, **_kwargs) -> str:
+            return '{"provider":"mihome","operation":"none","reason":"普通问候"}'
+
+    host = Host()
+    api = PrivateCompanionExtensionAPI(host)
+    api.register_reality_touch_provider({"name": "mihome", "list_scenes": lambda _: {"ok": True, "scenes": []}})
+
+    result = asyncio.run(api.resolve_reality_touch_request("target-1", "晚安"))
+
+    assert result == {"ok": True, "handled": False, "reason": "普通问候"}
 
 
 class _RecordingHost(RealityCompanionBridgeMixin):

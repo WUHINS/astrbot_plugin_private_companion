@@ -96,7 +96,7 @@
       to { opacity: 1; transform: scaleX(1); transform-origin: left; }
     }
   </style>
-  <link rel="stylesheet" href="./app.css?v=20260809-external-ability-controls-v3&amp;build=20260810-reference-upload-v1&amp;touch=reality-workspace-v1&amp;migration-notice=v2&amp;component-order=v1&amp;layout=model-routing-v2&amp;release=6.3.2" />
+  <link rel="stylesheet" href="./app.css?v=20260809-external-ability-controls-v3&amp;build=20260810-reference-upload-v1&amp;touch=reality-workspace-v1&amp;migration-notice=v2&amp;component-order=v1&amp;layout=model-routing-v2&amp;config=card-unify-v1&amp;release=6.3.2" />
   <!-- Keep the structured roleplay form readable while a WebUI asset is being refreshed. -->
   <style id="roleplay-layout-fallback">
     .roleplay-form,
@@ -163,7 +163,7 @@
   </style>
   <link rel="stylesheet" href="./css/header-tools.css?v=20260713-font-options" />
   <link rel="stylesheet" href="./css/qzone-mobile.css?v=20260711-qzone-image-preview" />
-  <link rel="stylesheet" href="./css/polish.css?v=20260810-responsive-containment-v1&amp;world=20260811-responsive-v2&amp;config=config-lifecycle-v1" />
+  <link rel="stylesheet" href="./css/polish.css?v=20260810-responsive-containment-v1&amp;world=20260811-responsive-v2&amp;config=config-lifecycle-v2" />
   <script>
     (function () {
       try {
@@ -401,7 +401,7 @@
           </section>
           <section>
             <b>世界知识</b>
-            <span>本页资料只作为日程、状态、主动动机、日记、识图、生图和世界观转写的背景补充。</span>
+            <span>本页资料作为日程、状态、主动动机、日记、识图、生图和世界观转写的背景补充；其中外貌、称呼等字段会被对应功能直接读取，字段旁的徽章会标明去向。</span>
           </section>
           <section>
             <b>群聊边界</b>
@@ -503,25 +503,37 @@
 关键设定：
 其他补充信息："></textarea>
               </label>
+              <div class="roleplay-appearance-alert roleplay-freeform" id="appearanceFreeformAlert" hidden>
+                <b>未检测到外貌标签行</b>
+                <span>旧版文案按“发型发色：”“瞳色：”等标签行识别角色外观；缺少这些标签时，识图与每日穿搭生图将无法获取角色外观。建议改用“标准化填写”，或在此按标签行补上外貌信息。</span>
+              </div>
               <div class="roleplay-standard persona-standard-grid">
                 <fieldset class="roleplay-field-group roleplay-identity-group">
                   <legend>基础身份</legend>
-                  <label>姓名 <textarea data-roleplay-persona-part="name" rows="2"></textarea></label>
-                  <label>种族 <textarea data-roleplay-persona-part="species" rows="2"></textarea></label>
-                  <label>生日 <textarea data-roleplay-persona-part="age" rows="2"></textarea></label>
-                  <label>性别 <textarea data-roleplay-persona-part="gender" rows="2"></textarea></label>
+                  <label><span class="field-head">姓名 <em class="field-impact" title="日程会把姓名列为已知角色实体，识图也用它辅助判断头像或截图的归属">日程 · 识图</em></span><textarea data-roleplay-persona-part="name" rows="2"></textarea></label>
+                  <label><span class="field-head">种族 <em class="field-impact" title="「机器人」「拟人化」等种族关键词会决定健康、饥饿、生理期等状态模拟是否启用">状态模拟</em></span><textarea data-roleplay-persona-part="species" rows="2"></textarea></label>
+                  <label><span class="field-head">生日 <em class="field-impact" title="解析成功后，Bot 生日当天会自然和主要用户分享一次；支持农历按当年换算">主动 · 一次/年</em></span><textarea data-roleplay-persona-part="age" rows="2" placeholder="例如：6月18日 / 06-18 / 农历六月初三；年份会被忽略"></textarea><small class="field-note birthday-parse-hint" data-birthday-hint="persona"></small><small class="field-note">支持月日或农历（按当年换算），年份会被忽略；生日当天 Bot 会自然和主要用户分享一次，不重复打扰。</small></label>
+                  <label><span class="field-head">性别 <em class="field-impact" title="性别会作为视觉标签参与识图归属判断与每日穿搭生图">识图 · 生图</em></span><textarea data-roleplay-persona-part="gender" rows="2"></textarea></label>
                 </fieldset>
                 <div class="roleplay-appearance-group">
-                  <h4>外貌信息</h4>
+                  <div class="roleplay-group-head">
+                    <h4>外貌信息</h4>
+                    <em class="field-impact field-impact--strong" title="这些字段按“标签：内容”行交给识图归属判断、每日穿搭生图和视觉缓存">识图 · 生图</em>
+                  </div>
+                  <p class="roleplay-group-desc">以下字段会按标签行交给识图归属判断、每日穿搭生图和视觉缓存；写具体、稳定的视觉特征，避免频繁变动。</p>
                   <label>识别点 <textarea data-roleplay-persona-part="appearance" rows="2"></textarea></label>
                   <label>发型发色 <textarea data-roleplay-persona-part="hair" rows="2"></textarea></label>
                   <label>瞳色 <textarea data-roleplay-persona-part="eyes" rows="2"></textarea></label>
                   <label>服饰风格 <textarea data-roleplay-persona-part="clothing" rows="2"></textarea></label>
+                  <div class="roleplay-appearance-alert" id="appearanceStandardAlert" hidden>
+                    <b>尚未填写外貌识别信息</b>
+                    <span>识图将无法判断头像或截图中的角色是否为当前角色，每日穿搭生图也会缺少角色外观。至少填写识别点、发型发色、瞳色或服饰风格之一。</span>
+                  </div>
                 </div>
                 <fieldset class="roleplay-field-group roleplay-character-group">
                   <legend>性格与生活</legend>
-                  <label>职业/身份 <textarea data-roleplay-persona-part="identity" rows="2"></textarea></label>
-                  <label>性格描述 <textarea data-roleplay-persona-part="personality" rows="2"></textarea></label>
+                  <label><span class="field-head">职业/身份 <em class="field-impact" title="「机器人」「学生」等身份关键词会决定健康、饥饿、生理期等状态模拟是否启用">状态模拟</em></span><textarea data-roleplay-persona-part="identity" rows="2"></textarea></label>
+                  <label><span class="field-head">性格描述 <em class="field-impact" title="性格会同步为回复风格参考，并影响创作节奏">回复 · 创作</em></span><textarea data-roleplay-persona-part="personality" rows="2"></textarea></label>
                   <label>核心欲望/目标 <textarea data-roleplay-persona-part="desire" rows="2"></textarea></label>
                   <label>爱好 <textarea data-roleplay-persona-part="hobbies" rows="2"></textarea></label>
                   <label class="wide-field">禁忌 <textarea data-roleplay-persona-part="taboo" rows="2"></textarea></label>
@@ -536,11 +548,12 @@
               </div>
               <details class="roleplay-visual-identity-extra">
                 <summary>
-                  <span><b>特殊图像身份线索（可选）</b><small>只补充上方外貌字段无法表达的识别信息。</small></span>
+                  <span><b>特殊图像身份线索（可选）</b><small>只补充上方外貌字段无法表达的识别信息；识图与穿搭生图会读取。</small></span>
                 </summary>
-                <label class="roleplay-textarea">头像、截图与二创识别线索
+                <label class="roleplay-textarea"><span class="field-head">头像、截图与二创识别线索 <em class="field-impact">识图 · 生图</em></span>
                   <textarea name="private_image_self_recognition_hint" rows="4" placeholder="例如：常用头像的构图或标志；聊天截图中使用的昵称；OC / 二创形象的别名；表情包固定签名或水印。
 不要重复填写发色、瞳色、服装等上方已有外貌信息，也不要填写用户资料。"></textarea>
+                  <small class="field-note">最多 1200 字，超出部分保存时会被截断。</small>
                 </label>
               </details>
             </section>
@@ -552,7 +565,7 @@
                   <h3>世界观蓝图</h3>
                 </div>
                 <button type="button" class="roleplay-example-btn" data-roleplay-example="world">填入示例</button>
-                <label>适配模式
+                <label><span class="field-head">适配模式 <em class="field-impact" title="适配影响私聊、主动、日记、梦境、QQ空间、书柜等几乎所有功能的称呼转写">全局转写</em></span>
                   <select name="worldview_adaptation_mode">
                     <option value="auto">自动</option>
                     <option value="modern">现代日常</option>
@@ -634,7 +647,7 @@ QQ空间 = 公开札记
               </div>
               <button type="button" class="roleplay-example-btn" data-roleplay-example="user">填入示例</button>
               <div class="roleplay-user-fields">
-                <label>对用户的称呼 <input name="default_nickname" /></label>
+                <label><span class="field-head">对用户的称呼 <em class="field-impact" title="Bot 在私聊、主动消息等场景对用户的默认称呼">全局称呼</em></span><input name="default_nickname" /></label>
               </div>
               <label class="roleplay-textarea roleplay-freeform">用户与关系补充
                 <textarea name="roleplay_user_profile_prompt" rows="5" placeholder="对用户的称呼：
@@ -647,7 +660,7 @@ QQ空间 = 公开札记
               </label>
               <div class="roleplay-standard user-standard-grid">
                 <label>性别 <textarea data-roleplay-user-part="user_gender" rows="2"></textarea></label>
-                <label>生日 <textarea data-roleplay-user-part="user_age" rows="2"></textarea></label>
+                <label>生日 <textarea data-roleplay-user-part="user_age" rows="2" placeholder="例如：6月18日 / 06-18 / 农历六月初三；年份会被忽略"></textarea><small class="field-note birthday-parse-hint" data-birthday-hint="user"></small><small class="field-note">用户在私聊中提到生日（含“我后天生日”“过两天我生日”）会被自动记忆并优先使用；此处填写作为兜底，同样支持农历。</small></label>
                 <label>职业 <textarea data-roleplay-user-part="user_occupation" rows="2"></textarea></label>
                 <label>是角色的XX <textarea data-roleplay-user-part="role_relation" rows="2"></textarea></label>
                 <label>与角色的相处方式 <textarea data-roleplay-user-part="interaction" rows="2"></textarea></label>
@@ -1734,9 +1747,10 @@ QQ空间 = 公开札记
                 <section class="runtime-settings-section">
                   <header class="runtime-settings-section-head">
                     <h3>资源配额</h3>
+                    <p>硬限额达到后会跳过后台模型调用；软限额开启时优先保留当下回复，仅暂缓低优先级后台任务。</p>
                   </header>
                   <div class="runtime-settings-grid">
-                    <label>每日插件 Token 限额 <input name="daily_token_limit" type="number" min="0" step="10000" /></label>
+                    <label class="runtime-settings-wide">每日插件 Token 限额 <input name="daily_token_limit" type="number" min="0" step="10000" /></label>
                     <label class="toggle-row"><input name="enable_daily_token_soft_limit" type="checkbox" /> <span>启用每日 Token 软限额</span></label>
                     <label>每日 Token 软限额 <input name="daily_token_soft_limit" type="number" min="0" step="10000" /></label>
                   </div>
@@ -2034,7 +2048,7 @@ QQ空间 = 公开札记
   <script src="./js/features/daily-outfit.js?v=20260711-qzone-preview-context"></script>
   <script src="./js/ui/appearance.js?v=20260713-font-options"></script>
   <!-- Loaded on demand by app.js through AstrBot's relative dynamic-import rewriting:
-       ./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&amp;manual=provider-input-v2&amp;layout=v2
+       ./js/panels/provider-tree.js?v=20260804-private-reading-capability-v1&amp;manual=provider-input-v2&amp;layout=v2&amp;rules=structured-v1
        ./js/panels/qzone-panel.js?v=20260810-qzone-classic-loader-v1 -->
   <script src="./app.js?v=20260809-proactive-tts-external-ability-photo-fixed-v1&amp;build=20260810-reference-upload-v2&amp;page=lazy-classic-loader-v1&amp;scope=photo-scope-quota-v1&amp;touch=reality-workspace-v1&amp;memory-source=memory-companion-v2&amp;user-create=profile-v1&amp;relationship-role-photo=pr125-v1&amp;camera-runtime-scope=v1&amp;config=config-lifecycle-v1&amp;troubleshooting=diagnostic-category-label-v1&amp;content-visibility=v1&amp;migration-notice=v4&amp;component-order=v1&amp;layout=model-routing-v2&amp;persona-style-batch-recovery=v1&amp;preset-save=v1&amp;release=6.3.2"></script>
 </body>

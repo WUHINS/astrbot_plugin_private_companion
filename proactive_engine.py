@@ -71,6 +71,7 @@ except Exception:
     Converter = None
     Solar = None
 
+from .birthday_support import LUNAR_CALENDAR, extract_labeled_birthday_line, parse_birthday_text
 from .constants import (
     DEFAULT_DAILY_PLAN_ITEMS,
     DEFAULT_HUMANIZED_STATE,
@@ -1096,6 +1097,7 @@ class ProactiveEngineMixin:
             "birthday_celebration",
             "birthday_eve_hint",
             "birthday_makeup",
+            "bot_birthday_share",
             "important_date_share",
             "special_day_greeting",
             "insomnia_night",
@@ -1717,9 +1719,9 @@ class ProactiveEngineMixin:
             "anonymous_area_dwell", "anonymous_area_familiarity",
         }:
             kind = "care"
-        elif normalized_reason in {"activity_share", "diary_share", "background_schedule", "creative_share", "personal_goal_progress"}:
+        elif normalized_reason in {"activity_share", "diary_share", "background_schedule", "bot_birthday_share", "creative_share", "personal_goal_progress"}:
             kind = "self_share"
-        elif normalized_reason in {"important_date_share", "memo_note_reminder", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow"}:
+        elif normalized_reason in {"important_date_share", "memo_note_reminder", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow", "bot_birthday_share"}:
             kind = "reminder"
         elif normalized_reason in {"environment_change", "weather_alert"}:
             kind = "observation"
@@ -1748,7 +1750,7 @@ class ProactiveEngineMixin:
             anchor_type, anchor_score = "meal_time", 0.74
         elif normalized_reason in {"background_schedule"} or any(token in evidence_text for token in ("手上", "忙到", "日程", "计划", "刚好停")):
             anchor_type, anchor_score = "current_activity", 0.62
-        elif normalized_reason in {"important_date_share", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow"} or any(token in evidence_text for token in ("生日", "纪念", "日期", "考试", "提醒")):
+        elif normalized_reason in {"important_date_share", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow", "bot_birthday_share"} or any(token in evidence_text for token in ("生日", "纪念", "日期", "考试", "提醒")):
             anchor_type, anchor_score = "important_date", 0.78
         elif normalized_reason in {"environment_change", "weather_alert"}:
             anchor_type, anchor_score = "environment", 0.82
@@ -2662,7 +2664,7 @@ class ProactiveEngineMixin:
             value += 0.35
         if source in {"pending_followup", "daily_greeting", "story", "state"}:
             value += 0.08
-        if reason in {"important_date_share", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow", "quiet_care", "group_share", "news_share", "creative_share"}:
+        if reason in {"important_date_share", "birthday_eve_hint", "birthday_celebration", "birthday_makeup", "birthday_afterglow", "bot_birthday_share", "quiet_care", "group_share", "news_share", "creative_share"}:
             value += 0.08
         if self._private_user_role(user) == "friend":
             value -= 0.06
@@ -2711,6 +2713,7 @@ class ProactiveEngineMixin:
             "birthday_celebration",
             "birthday_makeup",
             "birthday_afterglow",
+            "bot_birthday_share",
             "important_date_share",
             "special_day_greeting",
             "bili_video_share",
@@ -2751,6 +2754,7 @@ class ProactiveEngineMixin:
             "environment_change",
             "memo_note_reminder",
             "birthday_celebration",
+            "bot_birthday_share",
             "special_day_greeting",
             "insomnia_night",
         } or normalized_source in {
@@ -7532,9 +7536,50 @@ class ProactiveEngineMixin:
         candidates.sort(key=lambda item: item[0])
         return candidates[0][1]
 
-    def _birthday_profile_matches_on_date(self, user: dict[str, Any], current: datetime) -> bool:
-        profile = user.get("birthday_profile")
+    @staticmethod
+    def _normalized_birthday_profile(profile: Any) -> dict[str, Any] | None:
         if not isinstance(profile, dict):
+            return None
+        month = _safe_int(profile.get("month"), 0)
+        day = _safe_int(profile.get("day"), 0)
+        calendar = LUNAR_CALENDAR if _single_line(profile.get("calendar"), 12).lower() == "lunar" else "solar"
+        max_day = 30 if calendar == LUNAR_CALENDAR else 31
+        if not (1 <= month <= 12 and 1 <= day <= max_day):
+            return None
+        return {"calendar": calendar, "month": month, "day": day}
+
+    def _configured_user_birthday_profile(self) -> dict[str, Any] | None:
+        """从世界知识“用户生日：”配置行解析的兜底生日。"""
+        text = str(getattr(self, "roleplay_user_profile_prompt", "") or "")
+        cache = getattr(self, "_user_birthday_config_cache", None)
+        if cache and isinstance(cache, tuple) and cache[0] == text:
+            return cache[1]
+        line = extract_labeled_birthday_line(text, "用户生日")
+        profile = self._normalized_birthday_profile(parse_birthday_text(line)) if line else None
+        self._user_birthday_config_cache = (text, profile)
+        return profile
+
+    def _effective_user_birthday_profile(self, user: dict[str, Any]) -> dict[str, Any] | None:
+        """用户聊天中亲口说的生日优先，其次是世界知识页的配置行。"""
+        own = self._normalized_birthday_profile(user.get("birthday_profile"))
+        if own:
+            return own
+        return self._configured_user_birthday_profile()
+
+    def _bot_birthday_profile(self) -> dict[str, Any] | None:
+        """从世界知识角色设定“生日：”行解析的 Bot 自身生日。"""
+        text = str(getattr(self, "schedule_persona_prompt", "") or "")
+        cache = getattr(self, "_bot_birthday_config_cache", None)
+        if cache and isinstance(cache, tuple) and cache[0] == text:
+            return cache[1]
+        line = extract_labeled_birthday_line(text, "生日")
+        profile = self._normalized_birthday_profile(parse_birthday_text(line)) if line else None
+        self._bot_birthday_config_cache = (text, profile)
+        return profile
+
+    @staticmethod
+    def _birthday_profile_matches_profile(profile: dict[str, Any] | None, current: datetime) -> bool:
+        if not profile:
             return False
         month = _safe_int(profile.get("month"), 0)
         day = _safe_int(profile.get("day"), 0)
@@ -7550,6 +7595,9 @@ class ProactiveEngineMixin:
         except Exception as exc:
             logger.debug("[PrivateCompanion] 农历生日匹配失败: %s", _single_line(exc, 120))
             return False
+
+    def _birthday_profile_matches_on_date(self, user: dict[str, Any], current: datetime) -> bool:
+        return self._birthday_profile_matches_profile(self._effective_user_birthday_profile(user), current)
 
     def _birthday_stage_for_date(self, user: dict[str, Any], current: datetime) -> str:
         if self._birthday_profile_matches_on_date(user, current):
@@ -7634,6 +7682,8 @@ class ProactiveEngineMixin:
             if _safe_int(user.get("ignored_streak"), 0, 0) > 0 and minute < 18 * 60:
                 return None
             midnight = minute < 15
+            scheduled = now
+            window = "09:30-21:55"
             if midnight:
                 midnight_end = current.replace(hour=0, minute=15, second=0, microsecond=0).timestamp()
                 remaining = int(midnight_end - now)
@@ -7706,6 +7756,48 @@ class ProactiveEngineMixin:
             "_scheduled_ts": scheduled,
             "_birthday_stage": "afterglow",
             "context_key": "planned_birthday_event_context",
+            "context": {"observance_year": year},
+        }
+
+    def _pick_bot_birthday_event(
+        self,
+        user: dict[str, Any],
+        now: float | None = None,
+    ) -> dict[str, Any] | None:
+        """世界知识里写了角色生日时，Bot 生日当天对主要用户自然分享一次。"""
+        now = now or _now_ts()
+        if self._private_user_role(user) != "owner":
+            return None
+        profile = self._bot_birthday_profile()
+        if not profile:
+            return None
+        current = self._environment_fromtimestamp(now)
+        if not self._birthday_profile_matches_profile(profile, current):
+            return None
+        if _safe_int(user.get("ignored_streak"), 0, 0) > 0:
+            return None
+        event = user.get("bot_birthday_event") if isinstance(user.get("bot_birthday_event"), dict) else {}
+        year = current.year
+        if _safe_int(event.get("shared_year"), 0) == year:
+            return None
+        recent_activity = self._latest_private_user_activity_ts(user)
+        if recent_activity <= 0 or now - recent_activity > 7 * 24 * 3600:
+            return None
+        minute = current.hour * 60 + current.minute
+        if minute < 10 * 60 or minute > 20 * 60 + 30:
+            return None
+        scheduled = now + random.randint(10, 50) * 60
+        return {
+            "window": self._window_from_delay_minutes(max(5, int((scheduled - now) / 60)), width_minutes=48),
+            "reason": "bot_birthday_share",
+            "action": "message",
+            "why": "今天是自己的生日，想把这一点点开心自然地分给对方，不要求回应",
+            "topic": "今天是我的生日",
+            "motive": "今天是自己生日，想和对方分享这一点点开心",
+            "_scheduled_ts": scheduled,
+            "_proactive_source": "bot_birthday",
+            "_birthday_stage": "bot_birthday",
+            "context_key": "planned_bot_birthday_context",
             "context": {"observance_year": year},
         }
 
@@ -7860,6 +7952,8 @@ class ProactiveEngineMixin:
     def _birthday_curiosity_has_known_birthday(self, user: dict[str, Any]) -> bool:
         profile = user.get("birthday_profile")
         if isinstance(profile, dict) and (_safe_int(profile.get("month"), 0) or _single_line(profile.get("raw"), 80)):
+            return True
+        if self._configured_user_birthday_profile():
             return True
         memory = user.get("companion_memory")
         items = memory.get("items") if isinstance(memory, dict) else []

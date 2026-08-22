@@ -764,6 +764,7 @@ class CoreStoreMixin:
         target_path = Path(sqlite_path if backend == "sqlite" else self.data_file)
         target_backup: Path | None = None
         target_write_started = False
+        loaded: dict[str, Any] | None = None
         try:
             next_manager = StoreManager(
                 backend_name=backend,

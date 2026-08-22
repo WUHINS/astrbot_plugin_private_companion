@@ -34,7 +34,7 @@ class ConfigPageLifecycleFilterTests(unittest.TestCase):
             'id="featureStageFilters"',
             'id="featureStatusFilters"',
             'aria-live="polite"',
-            "config=config-lifecycle-v1",
+            "config=config-lifecycle-v2",
         ):
             self.assertIn(marker, self.html)
 

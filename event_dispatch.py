@@ -1846,6 +1846,7 @@ class EventDispatchMixin:
                 add_persisted(text, "url")
                 continue
             local_path_getter = getattr(self, "_private_image_local_path_from_source", None)
+            source_path: Path | None = None
             try:
                 source_path = local_path_getter(text) if callable(local_path_getter) else Path(text)
                 exists = source_path is not None and source_path.exists() and source_path.is_file()
@@ -2421,6 +2422,7 @@ class EventDispatchMixin:
             return None
         local_text = text[len("file://"):] if text.startswith("file://") else text
         if not re.match(r"^https?://", text, flags=re.I) and not text.startswith(("data:", "base64://")):
+            path: Path | None = None
             try:
                 path = Path(local_text)
                 exists = path.exists() and path.is_file()

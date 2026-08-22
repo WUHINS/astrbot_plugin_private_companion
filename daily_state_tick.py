@@ -1921,6 +1921,16 @@ class DailyStateTickMixin:
                     birthday_event["afterglow_year"] = birthday_year
                     birthday_event["afterglow_at"] = current["last_sent"]
                 current["birthday_event"] = birthday_event
+            if reason == "bot_birthday_share":
+                bot_birthday_event = current.get("bot_birthday_event") if isinstance(current.get("bot_birthday_event"), dict) else {}
+                bot_birthday_context = (
+                    current.get("planned_bot_birthday_context")
+                    if isinstance(current.get("planned_bot_birthday_context"), dict)
+                    else {}
+                )
+                bot_birthday_event["shared_year"] = _safe_int(bot_birthday_context.get("observance_year"), self._environment_now().year)
+                bot_birthday_event["shared_at"] = current["last_sent"]
+                current["bot_birthday_event"] = bot_birthday_event
             if reason == "special_day_greeting":
                 special_context = (
                     current.get("planned_special_day_context")

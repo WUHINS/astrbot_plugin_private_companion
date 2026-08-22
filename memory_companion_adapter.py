@@ -3284,6 +3284,7 @@ class MemoryCompanionAdapterMixin:
             platform = effective_session.split(":", 1)[0] if ":" in effective_session else ""
             bot_id = _single_line(user.get("identity_bot_id"), 160) or self._memory_companion_bridge_bot_id()
             context_failure_reason = ""
+            capability = None
             if not callable(context_creator):
                 context_failure_reason = "requester_context_method_unavailable"
             elif not platform:

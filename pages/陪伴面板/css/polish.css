@@ -2936,6 +2936,28 @@ small {
   background: rgba(160, 182, 211, .34);
 }
 
+#panel-config .config-common-settings-body > .config-common-section-head:not(:first-child) {
+  margin-top: 6px;
+}
+
+#panel-config .config-common-inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+#panel-config .config-common-inline-form > label {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+#panel-config .config-common-inline-form > button {
+  flex: 0 0 auto;
+  min-height: 38px;
+  border-radius: 7px;
+}
+
 #panel-config .access-coverage-panel {
   display: grid;
   gap: 8px;
@@ -3020,6 +3042,18 @@ small {
   border-left: 1px solid var(--line-soft);
 }
 
+#panel-config .runtime-settings-form > .runtime-settings-section:nth-of-type(even) {
+  padding-right: 0;
+  padding-left: 18px;
+  border-left: 1px solid var(--line-soft);
+}
+
+#panel-config .runtime-settings-form > .runtime-settings-section:nth-of-type(odd):not(:first-of-type) {
+  padding-right: 18px;
+  padding-left: 0;
+  border-left: 0;
+}
+
 #panel-config .runtime-settings-section:last-of-type {
   padding-bottom: 2px;
   border-bottom: 0;
@@ -3039,7 +3073,18 @@ small {
 }
 
 #panel-config .runtime-settings-section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 15px;
+}
+
+#panel-config .runtime-settings-section-head h3::before {
+  content: "";
+  width: 4px;
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--gold), var(--blue));
 }
 
 #panel-config .runtime-settings-section-head p {
@@ -3052,6 +3097,12 @@ small {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 14px;
+  align-items: start;
+}
+
+#panel-config .runtime-settings-grid input[type="number"],
+#panel-config .runtime-settings-grid input[type="text"] {
+  min-height: 38px;
 }
 
 #panel-config .runtime-settings-form > .actions {
@@ -3101,7 +3152,9 @@ small {
 
   #panel-config .runtime-settings-section,
   #panel-config .runtime-settings-section + .runtime-settings-section,
-  #panel-config .runtime-settings-section:last-of-type {
+  #panel-config .runtime-settings-section:last-of-type,
+  #panel-config .runtime-settings-form > .runtime-settings-section:nth-of-type(even),
+  #panel-config .runtime-settings-form > .runtime-settings-section:nth-of-type(odd):not(:first-of-type) {
     padding: 2px 0 16px;
     border-left: 0;
   }

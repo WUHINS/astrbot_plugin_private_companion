@@ -3073,6 +3073,7 @@ class ProactiveMixin(UserRestGateMixin):
             ("pending_followup", self._pick_pending_followup_event(user, now)),
             ("open_loop", self._pick_open_loop_followup_event(user, now)),
             ("birthday_celebration", self._pick_birthday_celebration_event(user, now)),
+            ("bot_birthday", self._pick_bot_birthday_event(user, now)),
             ("special_day_ritual", self._pick_special_day_greeting_event(user, now=now)),
             ("night_care", self._pick_insomnia_night_event(user, now=now)),
             ("meal_care", self._pick_meal_care_event(user, now=now)),
