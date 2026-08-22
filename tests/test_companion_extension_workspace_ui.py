@@ -69,6 +69,9 @@ def test_reality_workspace_exposes_mobile_gateway_without_owning_implementation(
     assert 'const canToggle = Boolean(data && !state.realityTouchLoading && !state.realityTouchError)' in script
     assert 'mobile.telemetry_enabled === true' in script
     assert 'mobile.telemetry_ttl_seconds || 3600' in script
+    assert 'name="mobile_activity_enabled"' in script
+    assert 'mobile.activity_enabled === true' in script
+    assert 'mobile_activity_ttl_seconds' in script
     assert "syncRealityTouchOverviewState(result)" in script
     assert '"enable_experimental_bluetooth_wakeup",\n  "enable_daily_case_review_experiment"' not in script
 

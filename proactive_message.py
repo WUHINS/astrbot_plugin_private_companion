@@ -6237,14 +6237,23 @@ Output:
         fallback_scene = f"主动开口；原因={reason or 'check_in'}；动作={action or 'message'}"
         if reason == "creative_share":
             fallback_scene = "主动分享自己的创作；作品原文与聊天引入必须保持清晰边界"
+        # A troubleshooting/manual test must still produce a small, truthful
+        # message when both model calls time out or return an empty body. Keep
+        # this local fallback deliberately generic; it does not invent an
+        # event, delivery, or user state.
+        local_fallback = (
+            f"刚刚想到{topic}，想来和你说一声。"
+            if topic
+            else f"刚刚想起你了，来和你打个招呼。"
+        )
         return await self._rewrite_reference_reply_with_persona(
             reference,
             scene=fallback_scene,
             user=user,
-            fallback_text="",
+            fallback_text=local_fallback,
             task="proactive_message_fallback",
             max_chars=180,
-            allow_fallback=False,
+            allow_fallback=True,
         )
 
     async def _finalize_proactive_generated_text(

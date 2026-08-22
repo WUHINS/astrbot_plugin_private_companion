@@ -32831,6 +32831,13 @@ function renderRealityTouchMobilePanel() {
             <label class="rt-field"><span>位置上下文有效期（秒）</span><input name="mobile_location_ttl_seconds" type="number" min="60" max="86400" value="${Number(mobile.location_ttl_seconds || 900)}"></label>
           </div>
           <label class="rt-switch">
+            <input type="checkbox" name="mobile_activity_enabled" ${mobile.activity_enabled ? "checked" : ""}>
+            <span><b>手机活动摘要（伪窥屏）</b><small>仅接收用户在手机端授权后上报的应用类别和脱敏名称，不接收截图、窗口标题或消息内容。</small></span>
+          </label>
+          <div class="rt-grid">
+            <label class="rt-field"><span>活动摘要有效期（秒）</span><input name="mobile_activity_ttl_seconds" type="number" min="60" max="86400" step="60" value="${Number(mobile.activity_ttl_seconds || 900)}"></label>
+          </div>
+          <label class="rt-switch">
             <input type="checkbox" name="mobile_amap_reverse_geocode_enabled" ${mobile.amap_reverse_geocode_enabled ? "checked" : ""}>
             <span><b>启用高德区域识别</b><small>将手机位置转换为城市/城区背景，用于通勤、天气和生活场景；不把精确地址交给陪伴模型。</small></span>
           </label>
@@ -32997,6 +33004,10 @@ function realityGlobalConfigPayload(root, enabledOverride) {
         : mobile.telemetry_enabled === true,
       telemetry_ttl_seconds: Number(
         form?.elements.mobile_telemetry_ttl_seconds?.value || mobile.telemetry_ttl_seconds || 3600,
+      ),
+      activity_enabled: form ? Boolean(form.elements.mobile_activity_enabled?.checked) : mobile.activity_enabled === true,
+      activity_ttl_seconds: Number(
+        form?.elements.mobile_activity_ttl_seconds?.value || mobile.activity_ttl_seconds || 900,
       ),
       proxy_rooms: form ? Boolean(form.elements.mobile_proxy_rooms?.checked) : mobile.proxy_rooms !== false,
       screen_upload_enabled: form ? Boolean(form.elements.mobile_screen_upload_enabled?.checked) : mobile.screen_upload_enabled !== false,
