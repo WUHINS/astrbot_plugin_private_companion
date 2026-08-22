@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 import sqlite3
@@ -442,6 +443,28 @@ class MigrationSourceInspectorTests(unittest.TestCase):
 
         self.assertEqual({"json": 0, "sqlite": 1}, inventory["formats"])
         self.assertEqual([1], inventory["section_schema_versions"])
+
+    def test_sqlite_v2_legacy_serialized_checksum_is_supported(self) -> None:
+        source = self._sqlite_from_fixture(
+            schema_version=2,
+            name="legacy-serialized-checksum.db",
+        )
+        connection = sqlite3.connect(source)
+        try:
+            raw_payload = connection.execute(
+                "SELECT payload_json FROM store_sections WHERE section_name='users'"
+            ).fetchone()[0]
+            checksum = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+            connection.execute(
+                "UPDATE store_sections SET checksum=? WHERE section_name='users'",
+                (checksum,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        inventory = inspect_migration_sources(self.data_dir, [source])
+        self.assertEqual({"json": 0, "sqlite": 1}, inventory["formats"])
 
     def test_rejects_symlink_and_path_escape(self) -> None:
         outside = self.data_dir.parent / f"{self.data_dir.name}-outside.json"

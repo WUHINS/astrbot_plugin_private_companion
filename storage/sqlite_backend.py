@@ -77,6 +77,24 @@ def _payload_checksum(payload_json: str) -> str:
     return hashlib.sha256(payload_json.encode("utf-8")).hexdigest()
 
 
+def _checksum_candidates(payload_json: str, parsed: Any) -> set[str]:
+    """Return current and known pre-canonicalization checksums."""
+    serializations = {
+        str(payload_json),
+        _canonical_json(parsed),
+        json.dumps(parsed, ensure_ascii=False),
+        json.dumps(parsed, ensure_ascii=False, sort_keys=True),
+        json.dumps(parsed, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        json.dumps(parsed, ensure_ascii=True, sort_keys=True),
+    }
+    return {_payload_checksum(value) for value in serializations}
+
+
+def _checksum_matches(payload_json: str, parsed: Any, checksum: Any) -> bool:
+    value = str(checksum or "")
+    return not value or value in _checksum_candidates(payload_json, parsed)
+
+
 def _section_name(value: Any) -> str:
     if not isinstance(value, str) or not value or len(value) > 256 or "\x00" in value:
         raise ValueError(
@@ -310,6 +328,37 @@ class SqliteStoreBackend(StoreBackendBase):
                 "SQLite initialized empty store metadata is inconsistent"
             )
 
+    def _repair_legacy_checksums(self, connection: sqlite3.Connection) -> None:
+        """Rewrite recognized legacy digests to the current canonical digest."""
+        rows = connection.execute(
+            "SELECT section_name,payload_json,checksum FROM store_sections"
+        ).fetchall()
+        repairs: list[tuple[str, str, str]] = []
+        for raw_name, raw_payload, raw_checksum in rows:
+            payload_json = str(raw_payload)
+            try:
+                parsed = json.loads(payload_json)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise SqliteSchemaError(
+                    f"SQLite section payload is invalid: {raw_name}"
+                ) from exc
+            current = _payload_checksum(_canonical_json(parsed))
+            existing = str(raw_checksum or "")
+            if not existing or existing == current:
+                continue
+            if not _checksum_matches(payload_json, parsed, existing):
+                raise SqliteSchemaError(
+                    f"SQLite section checksum mismatch: {raw_name}"
+                )
+            repairs.append((current, str(raw_name), existing))
+        if repairs:
+            connection.executemany(
+                "UPDATE store_sections SET checksum=? "
+                "WHERE section_name=? AND checksum=?",
+                repairs,
+            )
+            connection.commit()
+
     def _create_empty_v2_schema(self, connection: sqlite3.Connection) -> None:
         try:
             connection.execute("BEGIN IMMEDIATE")
@@ -384,7 +433,9 @@ class SqliteStoreBackend(StoreBackendBase):
                 payload_json = _canonical_json(parsed)
                 checksum = _payload_checksum(payload_json)
                 existing_checksum = str(raw_checksum or "")
-                if existing_checksum and existing_checksum != checksum:
+                if existing_checksum and not _checksum_matches(
+                    str(raw_payload), parsed, existing_checksum
+                ):
                     raise SqliteSchemaError(
                         f"SQLite v1 section checksum mismatch: {name}"
                     )
@@ -450,6 +501,7 @@ class SqliteStoreBackend(StoreBackendBase):
             )
         if version == _SCHEMA_VERSION:
             self._validate_v2_schema(connection)
+            self._repair_legacy_checksums(connection)
             return
 
         tables = self._table_names(connection)
@@ -516,11 +568,10 @@ class SqliteStoreBackend(StoreBackendBase):
                     raise ValueError(
                         f"SQLite section payload is invalid: {name}"
                     ) from exc
-                canonical = _canonical_json(parsed)
                 if (
                     int(schema_version) != _SCHEMA_VERSION
                     or int(revision) <= 0
-                    or (str(checksum) and str(checksum) != _payload_checksum(canonical))
+                    or not _checksum_matches(str(payload_json), parsed, checksum)
                 ):
                     raise ValueError(f"SQLite section checksum is invalid: {name}")
                 if int(is_deleted):

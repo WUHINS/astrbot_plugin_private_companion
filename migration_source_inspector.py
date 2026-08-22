@@ -74,6 +74,27 @@ def _canonical(value: Any) -> str:
     )
 
 
+def _checksum_candidates(payload_json: str, parsed: Any) -> set[str]:
+    """Recognize current and pre-canonicalization payload digests."""
+    serializations = {
+        str(payload_json),
+        _canonical(parsed),
+        json.dumps(parsed, ensure_ascii=False),
+        json.dumps(parsed, ensure_ascii=False, sort_keys=True),
+        json.dumps(parsed, ensure_ascii=True, sort_keys=True, separators=(",", ":")),
+        json.dumps(parsed, ensure_ascii=True, sort_keys=True),
+    }
+    return {
+        hashlib.sha256(value.encode("utf-8")).hexdigest()
+        for value in serializations
+    }
+
+
+def _checksum_matches(payload_json: str, parsed: Any, checksum: Any) -> bool:
+    value = str(checksum or "")
+    return not value or value in _checksum_candidates(payload_json, parsed)
+
+
 def _is_sqlite(path: Path) -> bool:
     try:
         with path.open("rb") as handle:
@@ -353,10 +374,7 @@ def _inspect_sqlite(path: Path) -> dict[str, Any]:
                     "migration_source_section_json_invalid"
                 ) from exc
             checksum = str(raw_checksum or "")
-            expected_checksum = hashlib.sha256(
-                _canonical(parsed).encode("utf-8")
-            ).hexdigest()
-            if checksum and checksum != expected_checksum:
+            if not _checksum_matches(raw_payload, parsed, checksum):
                 raise MigrationSourceInspectionError(
                     "migration_source_checksum_invalid"
                 )

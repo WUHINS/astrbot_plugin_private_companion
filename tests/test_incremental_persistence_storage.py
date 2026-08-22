@@ -218,6 +218,33 @@ class IncrementalPersistenceStorageTests(unittest.TestCase):
         self.assertEqual(1, len(list(self.root.glob("companions.db.pre-v2-*.bak"))))
         self.assertEqual(2, self.backend.next_revision())
 
+    def test_v1_legacy_serialized_checksum_is_recanonicalized(self) -> None:
+        value = {"42": {"name": "中文", "active": True}}
+        raw_payload = json.dumps(value, ensure_ascii=False)
+        legacy_checksum = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+        self._create_v1({"users": value}, checksum=legacy_checksum)
+
+        self.assertEqual({"users": value, "settings": {"source": "default"}}, self.backend.load_store())
+        self.assertEqual(_checksum(value), self._row("users")[2])
+
+    def test_v2_legacy_serialized_checksum_is_repaired_on_open(self) -> None:
+        value = {"42": {"name": "legacy"}}
+        self.backend.save_store({"users": value})
+        raw_payload = self._row("users")[0]
+        legacy_checksum = hashlib.sha256(raw_payload.encode("utf-8")).hexdigest()
+        connection = sqlite3.connect(self.sqlite_path)
+        try:
+            connection.execute(
+                "UPDATE store_sections SET checksum=? WHERE section_name='users'",
+                (legacy_checksum,),
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+        self.assertEqual(value, self.backend.load_store()["users"])
+        self.assertEqual(_checksum(value), self._row("users")[2])
+
     def test_empty_v1_store_remains_uninitialized_and_recovers_from_json(self) -> None:
         self._create_v1({})
         json_payload = {
