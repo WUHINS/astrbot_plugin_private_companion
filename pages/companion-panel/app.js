@@ -1416,6 +1416,7 @@ const featureMeta = {
   enable_photo_text_action: ["主动拍照/生图", "允许 Bot 在合适的主动动机下生成真实图片；生图 API 地址、Key、模型和队列请到“模型配置 → 生图模型”配置。"],
   enable_screen_glance_action: ["主动识屏", "允许 Bot 在合适动机下低频看一眼屏幕，并统一管理沉默后的额外识屏。"],
   enable_poke_action: ["主动戳一戳", "允许 Bot 在想轻轻刷存在感或逗一下用户时主动戳一戳。"],
+  enable_reactive_poke: ["被动戳一戳", "允许 Bot 在被用户戳时以文字或 LLM 回复，并可能反戳回去。"],
   enable_voice_action: ["主动语音", "允许 Bot 在合适的主动场景里留一小句语音；需要当前会话有可用 TTS provider。"],
   enable_photo_reference_image: ["参考图一致性", "可选。自拍、人像、头像和角色表情包自动使用人设参考图或今日穿搭图保持外观；关闭后只按提示词生成。"],
   enable_creative_cover_generation: ["创作封面", "可选。作品写出正文后调用当前文生图后端生成封面，并按作品类型、基调和内容自动匹配画风。"],
@@ -1636,6 +1637,7 @@ const featureStageKeySets = {
     "enable_photo_text_action",
     "enable_screen_glance_action",
     "enable_poke_action",
+    "enable_reactive_poke",
     "enable_voice_action",
     "enable_reply_interception_forward",
   ]),
@@ -2535,6 +2537,16 @@ const configLabels = {
   screen_peek_cooldown_minutes: "主动识屏冷却分钟",
   poke_action_max_times: "单次戳一戳上限",
   poke_action_cooldown_minutes: "主动戳一戳冷却分钟",
+  reactive_poke_trigger_probability: "触发回复总概率",
+  reactive_poke_normal_reply_probability: "预设回复概率",
+  reactive_poke_back_probability: "反戳概率",
+  reactive_poke_super_poke_probability: "超级反戳概率",
+  reactive_poke_back_times: "普通反戳次数",
+  reactive_poke_super_poke_times: "超级反戳次数",
+  reactive_poke_interval: "反戳间隔秒数",
+  reactive_poke_normal_replies: "预设回复列表",
+  reactive_poke_prompts: "被戳提示词列表",
+  reactive_poke_back_prompts: "反戳提示词列表",
   voice_action_max_chars: "主动语音最大字数",
   active_projects: "进行中创作",
   project_count: "创作项目",
@@ -3423,6 +3435,7 @@ const featureSettingGroups = {
   enable_photo_text_action: ["photo_generation_private_owner_max_daily", "photo_generation_private_friend_max_daily", "photo_generation_group_max_daily", "photo_generation_proactive_max_daily", "photo_generation_backend", "photo_action_max_daily", "proactive_photo_text_probability", "custom_photo_tool_name", "custom_photo_tool_prompt_param", "custom_photo_tool_kind_param", "custom_photo_tool_reference_param", "custom_photo_tool_extra_params", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "external_image_download_proxy", "external_image_download_use_environment_proxy", "enable_photo_reference_image", "photo_reference_catalog", "enable_group_nsfw_private_fallback", "group_nsfw_image_review_mode", "group_nsfw_image_review_sensitivity", "group_nsfw_image_review_min_confidence", "group_nsfw_image_review_timeout_seconds", "group_nsfw_image_review_max_dimension", "group_nsfw_image_review_failure_action", "group_nsfw_image_review_custom_prompt", "enable_daily_outfit_photo", "enable_creative_cover_generation", "daily_outfit_photo_prompt", "daily_outfit_rotation_days", "natural_language_photo_generation_mode", "command_photo_generation_max_daily", "photo_generation_trace_max_size_kb", "photo_generation_trace_backup_count", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "natural_language_photo_extra_prompt", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "photo_generation_prompt_format", "photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_negative_prompt_mode", "photo_generation_negative_prompt", "photo_generation_text2img_negative_prompt", "photo_generation_selfie_negative_prompt", "photo_generation_edit_negative_prompt", "photo_generation_fixed_prompt", "photo_generation_text2img_fixed_prompt", "photo_generation_selfie_fixed_prompt", "photo_generation_edit_fixed_prompt", "photo_generation_scene_presets", "enable_bot_relationship_network", "bot_relationship_cards"],
   enable_screen_glance_action: ["screen_peek_max_daily", "screen_peek_cooldown_minutes", "enable_goodnight_screen_check", "goodnight_screen_check_delay_minutes", "enable_unanswered_screen_peek_followup", "unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
   enable_poke_action: ["poke_action_max_times", "poke_action_cooldown_minutes"],
+  enable_reactive_poke: ["reactive_poke_trigger_probability", "reactive_poke_normal_reply_probability", "reactive_poke_back_probability", "reactive_poke_super_poke_probability", "reactive_poke_back_times", "reactive_poke_super_poke_times", "reactive_poke_interval", "reactive_poke_normal_replies", "reactive_poke_prompts", "reactive_poke_back_prompts"],
   enable_voice_action: ["voice_action_max_chars"],
   enable_reading_archive_integration: ["enable_reading_archive_boredom_read", "enable_reading_archive_ask_recommendation", "enable_reading_archive_vision", "enable_reading_archive_page_comments", "enable_reading_archive_rating", "reading_archive_min_interval_hours", "reading_archive_max_photo_count", "reading_archive_ask_probability", "reading_archive_default_keywords", "reading_archive_blocked_tags", "enable_reading_archive_preference_influence", "reading_archive_preference_min_ratings", "reading_archive_preference_max_terms"],
   enable_reading_archive_boredom_read: ["reading_archive_min_interval_hours", "reading_archive_max_photo_count", "reading_archive_share_probability", "reading_archive_default_keywords", "reading_archive_blocked_tags", "enable_reading_archive_preference_influence", "reading_archive_preference_min_ratings", "reading_archive_preference_max_terms"],
@@ -4210,6 +4223,23 @@ const featureSettingSections = {
       keys: ["poke_action_max_times", "poke_action_cooldown_minutes"],
     },
   ],
+  enable_reactive_poke: [
+    {
+      title: "触发概率",
+      note: "控制被戳时触发回复和反戳的各项概率。",
+      keys: ["reactive_poke_trigger_probability", "reactive_poke_normal_reply_probability", "reactive_poke_back_probability", "reactive_poke_super_poke_probability"],
+    },
+    {
+      title: "反戳次数与间隔",
+      note: "控制普通和超级反戳的次数及动作间隔。",
+      keys: ["reactive_poke_back_times", "reactive_poke_super_poke_times", "reactive_poke_interval"],
+    },
+    {
+      title: "回复与提示词",
+      note: "预设回复和 LLM 提示词，每行一条。",
+      keys: ["reactive_poke_normal_replies", "reactive_poke_prompts", "reactive_poke_back_prompts"],
+    },
+  ],
   enable_voice_action: [
     {
       title: "主动语音长度",
@@ -4367,6 +4397,16 @@ const featureSettingTypes = {
   goodnight_screen_check_delay_minutes: { type: "number", min: 1, max: 180, step: 1 },
   poke_action_max_times: { type: "number", min: 1, max: 3, step: 1 },
   poke_action_cooldown_minutes: { type: "number", min: 0, max: 1440, step: 5 },
+  reactive_poke_trigger_probability: { type: "number", min: 0, max: 1, step: 0.05 },
+  reactive_poke_normal_reply_probability: { type: "number", min: 0, max: 1, step: 0.05 },
+  reactive_poke_back_probability: { type: "number", min: 0, max: 1, step: 0.05 },
+  reactive_poke_super_poke_probability: { type: "number", min: 0, max: 1, step: 0.01 },
+  reactive_poke_back_times: { type: "number", min: 1, max: 10, step: 1 },
+  reactive_poke_super_poke_times: { type: "number", min: 1, max: 20, step: 1 },
+  reactive_poke_interval: { type: "number", min: 0.1, max: 5, step: 0.1 },
+  reactive_poke_normal_replies: { type: "textarea" },
+  reactive_poke_prompts: { type: "textarea" },
+  reactive_poke_back_prompts: { type: "textarea" },
   voice_action_max_chars: { type: "number", min: 6, max: 80, step: 2 },
   rest_reply_awake_grace_minutes: { type: "number", min: 0, max: 240, step: 5 },
   busy_reply_min_delay_seconds: { type: "number", min: 0, max: 900, step: 15 },
@@ -28739,6 +28779,7 @@ function featureDependencyLines(key) {
   if (key === "enable_tts_enhancement") dependencies.push(["依赖", "当前会话 TTS provider"]);
   if (key === "enable_screen_glance_action") dependencies.push(["依赖", "screen_companion 屏幕观察能力"]);
   if (key === "enable_poke_action") dependencies.push(["依赖", "当前平台支持戳一戳"]);
+  if (key === "enable_reactive_poke") dependencies.push(["依赖", "当前平台支持戳一戳"]);
   if (key === "enable_voice_action") dependencies.push(["依赖", "当前会话 TTS provider"]);
   if (key === "enable_yesterday_screen_diary_context") dependencies.push(["依赖", "screen_companion 昨日观察日记"]);
   if (key === "enable_livingmemory_integration") {
@@ -29430,7 +29471,7 @@ function featureImpactLines(key) {
     lines.push(["场景", "群回复 / 群主动 / 私聊主动"]);
   } else if (key === "enable_tts_enhancement") {
     lines.push(["场景", "私聊回复 / 群聊回复 / 可选全部私聊主动"]);
-  } else if (["enable_screen_glance_action", "enable_poke_action", "enable_voice_action"].includes(key)) {
+  } else if (["enable_screen_glance_action", "enable_poke_action", "enable_reactive_poke", "enable_voice_action"].includes(key)) {
     lines.push(["场景", "私聊主动动作"]);
   } else if (key.startsWith("enable_group_") || key === "enable_atrelay_tools" || key === "enable_cross_user_memory_bridge" || key === "enable_worldbook_member_recognition") {
     lines.push(["场景", "群聊 / 转述 / 关系网"]);

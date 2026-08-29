@@ -8116,6 +8116,139 @@ class PrivateCompanionPlugin(
                 _single_line(exc, 160),
             )
 
+    @filter.event_message_type(filter.EventMessageType.ALL, priority=9500)
+    @_multi_persona_event_context
+    async def handle_reactive_poke(self, event: AstrMessageEvent, *args, **kwargs):
+        """被动戳一戳：用户戳 Bot 时响应文字/LLM 回复，并可能反戳。"""
+        if self is None or not self.enabled:
+            return
+        if not self._is_onebot_poke_notice_event(event):
+            return
+        if not runtime_persona_setting(self, "enable_reactive_poke", False):
+            return
+        raw = self._event_raw_payload(event)
+        sender_id = str(raw.get("user_id") or "").strip()
+        target_id = str(raw.get("target_id") or "").strip()
+        bot_id = str(raw.get("self_id") or getattr(event, "self_id", "") or "").strip()
+        if not sender_id or not target_id or target_id != bot_id:
+            return
+        trigger_prob = runtime_persona_setting(self, "reactive_poke_trigger_probability", 1.0)
+        try:
+            trigger_prob = float(trigger_prob)
+        except Exception:
+            trigger_prob = 1.0
+        if random.random() > trigger_prob:
+            logger.debug("[PrivateCompanion] 被动戳一戳未达触发概率: %.2f", trigger_prob)
+            return
+        event.should_call_llm(False)
+        normal_prob = runtime_persona_setting(self, "reactive_poke_normal_reply_probability", 0.3)
+        try:
+            normal_prob = float(normal_prob)
+        except Exception:
+            normal_prob = 0.3
+        normal_replies = runtime_persona_setting(self, "reactive_poke_normal_replies", None)
+        if not isinstance(normal_replies, list) or not normal_replies:
+            normal_replies = [
+                "嗯？有人戳我吗？",
+                "哎呀，被发现了~",
+                "戳我干嘛呀~",
+                "在呢在呢~",
+                "唔…再戳就不理你了哦",
+            ]
+        if random.random() < normal_prob:
+            response = random.choice(normal_replies)
+            await event.send(event.plain_result(response))
+            logger.debug("[PrivateCompanion] 被动戳一戳已回复预设文字: %s", _single_line(response, 60))
+            return
+        prompts = runtime_persona_setting(self, "reactive_poke_prompts", None)
+        if not isinstance(prompts, list) or not prompts:
+            prompts = [
+                "有人戳了戳你，请你回一句俏皮的话。",
+                "你被人戳了一下，请给出你的反应。",
+            ]
+        poke_prompt = random.choice(prompts)
+        llm_text = await self._reactive_poke_call_llm(event, poke_prompt)
+        if llm_text:
+            llm_text = str(llm_text).strip()
+        if llm_text:
+            await event.send(event.plain_result(llm_text))
+        else:
+            response = random.choice(normal_replies)
+            await event.send(event.plain_result(response))
+        group_id = str(raw.get("group_id") or "").strip()
+        await self._reactive_poke_maybe_poke_back(event, sender_id, group_id)
+
+    async def _reactive_poke_call_llm(self, event: AstrMessageEvent, prompt: str) -> str | None:
+        """调用 LLM 生成被动戳一戳回复，复用统一 LLM 通道（token 预算/超时/回退）。"""
+        try:
+            return await self._llm_call(
+                str(prompt or "").strip(),
+                max_tokens=120,
+                task="reactive_poke_reply",
+                system_prompt=(
+                    "你是一位正在陪伴用户的 AI 角色。用户刚戳了戳你，请按当前人格"
+                    "只回复一句自然、简短、符合语气的回应。不要输出 JSON、Markdown、"
+                    "XML 标签、占位符或任何解释。"
+                ),
+                timeout_key="reactive_poke",
+                timeout_seconds=15.0,
+            )
+        except Exception as e:
+            logger.error("[PrivateCompanion] 被动戳一戳 LLM 调用失败: %s", _single_line(e, 160))
+            return None
+
+    async def _reactive_poke_maybe_poke_back(self, event: AstrMessageEvent, user_id: str, group_id: str) -> None:
+        """根据概率决定是否反戳。"""
+        back_prob = runtime_persona_setting(self, "reactive_poke_back_probability", 0.1)
+        super_prob = runtime_persona_setting(self, "reactive_poke_super_poke_probability", 0.01)
+        try:
+            back_prob = float(back_prob)
+        except Exception:
+            back_prob = 0.1
+        try:
+            super_prob = float(super_prob)
+        except Exception:
+            super_prob = 0.01
+        action_rand = random.random()
+        if action_rand >= back_prob + super_prob:
+            return
+        is_super = action_rand < super_prob
+        times = runtime_persona_setting(
+            self,
+            "reactive_poke_super_poke_times" if is_super else "reactive_poke_back_times",
+            5 if is_super else 1,
+        )
+        try:
+            times = int(times)
+        except Exception:
+            times = 5 if is_super else 1
+        interval = runtime_persona_setting(self, "reactive_poke_interval", 1.0)
+        try:
+            interval = float(interval)
+        except Exception:
+            interval = 1.0
+        back_prompts = runtime_persona_setting(self, "reactive_poke_back_prompts", None)
+        if isinstance(back_prompts, list) and back_prompts:
+            back_prompt = random.choice(back_prompts)
+            llm_text = await self._reactive_poke_call_llm(event, back_prompt)
+            if llm_text:
+                llm_text = str(llm_text).strip()
+            if llm_text:
+                await event.send(event.plain_result(llm_text))
+        client = self._resolve_aiocqhttp_client()
+        if client is None:
+            return
+        if not user_id.isdigit():
+            return
+        for i in range(times):
+            try:
+                await self._send_single_poke(client, user_id=user_id, group_id=group_id)
+                if i + 1 < times:
+                    await asyncio.sleep(interval)
+            except Exception as e:
+                logger.error("[PrivateCompanion] 被动反戳失败: %s", _single_line(e, 160))
+                break
+
     @filter.event_message_type(filter.EventMessageType.ALL, priority=10000)
     @_multi_persona_event_context
     async def observe_recall_enhancement_events(self, event: AstrMessageEvent, *args, **kwargs):
