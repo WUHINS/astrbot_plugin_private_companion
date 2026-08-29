@@ -437,6 +437,18 @@ async def inject_humanized_state(
                         group_sections.append(prompt_section("刚刚的转述动作", recent_atrelay_context))
                     if wakeup_state_text:
                         group_sections.append(prompt_section("群聊唤醒与当前状态", wakeup_state_text))
+                    if bool(runtime_persona_setting(self, "enable_group_social_context", False)):
+                        try:
+                            self._append_group_social_context_sections(
+                                group,
+                                group_sections,
+                                sender_id=sender_id,
+                            )
+                        except Exception as exc:
+                            logger.debug(
+                                "[PrivateCompanion] 群聊社交上下文注入失败: %s",
+                                _single_line(exc, 120),
+                            )
                     group_sections.extend(extra_sections)
                     realtime_formatter = getattr(self, "_format_external_realtime_prompt_section", None)
                     if callable(realtime_formatter):

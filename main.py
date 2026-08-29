@@ -8148,14 +8148,24 @@ class PrivateCompanionPlugin(
                 or getattr(event, "unified_msg_origin", ""),
                 160,
             )
+            recall_user_id = _single_line(raw.get("user_id"), 80)
             self._record_recalled_message_id(
                 message_id,
                 scope=scope,
                 notice_type=notice_type,
-                sender_id=_single_line(raw.get("user_id"), 80),
+                sender_id=recall_user_id,
             )
+            if notice_type == "group_recall":
+                recall_group_id = _single_line(raw.get("group_id"), 80)
+                if recall_group_id and recall_user_id:
+                    try:
+                        await self._note_group_joke_boundary_recall(recall_group_id, recall_user_id)
+                    except Exception as exc:
+                        logger.debug(
+                            "[PrivateCompanion] 撤回信号写入接梗边界失败: %s",
+                            _single_line(exc, 120),
+                        )
             if notice_type == "friend_recall":
-                recall_user_id = _single_line(raw.get("user_id"), 80)
                 if recall_user_id:
                     self._stop_passive_input_status_loop(recall_user_id)
                     logger.info(

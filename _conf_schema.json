@@ -8663,6 +8663,51 @@
         "condition": {
           "enable_group_companion": true
         }
+      },
+      "enable_group_social_context": {
+        "description": "群聊社交氛围总开关",
+        "type": "bool",
+        "hint": "开启后，Bot 会感知群聊氛围（调侃/互怼/严肃/火药味/告白/冷场）并据此调节扮演强度、记住名场面、接梗前先看边界。默认关闭，可逐步开启子项。",
+        "default": false,
+        "condition": {
+          "enable_group_companion": true
+        }
+      },
+      "enable_group_mood_detection": {
+        "description": "群聊氛围感知",
+        "type": "bool",
+        "hint": "从最近群消息用规则提炼氛围标签与社交张力，并把氛围摘要注入群聊上下文。",
+        "default": false,
+        "condition": {
+          "enable_group_social_context": true
+        }
+      },
+      "enable_group_roleplay_strength": {
+        "description": "群聊扮演强度自适应",
+        "type": "bool",
+        "hint": "根据氛围调节夸张度：玩闹氛围可以适度夸张接梗起哄，严肃/火药味/冷场时克制回应。",
+        "default": false,
+        "condition": {
+          "enable_group_social_context": true
+        }
+      },
+      "enable_group_moments": {
+        "description": "群聊名场面记忆",
+        "type": "bool",
+        "hint": "用规则粗筛群里的名场面候选（引用回复、火花词、多人爆冲），带时效保留并在需要时注入群聊上下文。",
+        "default": false,
+        "condition": {
+          "enable_group_social_context": true
+        }
+      },
+      "enable_group_joke_guard": {
+        "description": "群聊接梗边界护栏",
+        "type": "bool",
+        "hint": "跟踪成员的玩笑敏感度（撤回、严肃反对、冷场信号），对敏感成员降氛围强度并避免向其开玩笑。",
+        "default": false,
+        "condition": {
+          "enable_group_social_context": true
+        }
       }
     }
   },

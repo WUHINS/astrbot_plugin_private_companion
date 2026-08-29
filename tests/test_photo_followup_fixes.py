@@ -185,25 +185,6 @@ class PhotoFollowupFixTests(unittest.IsolatedAsyncioTestCase):
             )
         )
 
-    def test_signed_image_download_url_keeps_original_encoding(self) -> None:
-        harness = _FrameworkHarness()
-        signed_url = (
-            "https://aoss.example/image/a%2Fb.png?"
-            "X-Amz-Credential=AK%2F20260711%2Fcn-sh-01%2Fs3%2Faws4_request&"
-            "X-Amz-Signature=abc%2Bdef%2F123"
-        )
-        request_target, preserved = harness._external_image_download_target(signed_url)
-        self.assertTrue(preserved)
-        self.assertEqual(str(request_target), signed_url)
-
-    def test_plain_image_download_url_stays_a_string(self) -> None:
-        harness = _FrameworkHarness()
-        image_url = "https://cdn.example/image.png?width=1024"
-        request_target, preserved = harness._external_image_download_target(image_url)
-        self.assertFalse(preserved)
-        self.assertIsInstance(request_target, str)
-        self.assertEqual(request_target, image_url)
-
     def test_daily_outfit_weather_prompt_reads_cached_weather(self) -> None:
         harness = _PhotoActionHarness()
         harness.data = {

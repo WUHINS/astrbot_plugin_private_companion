@@ -120,6 +120,17 @@ from .conversation_injection_plan import (
     get_conversation_injection_plan,
 )
 from .conversation_prompt_section import prompt_section
+from .domains.social.group_mood import settle_group_mood, summarize_group_mood
+from .domains.social.roleplay_strength import project_roleplay_strength
+from .domains.social.group_moments import (
+    extract_group_moment_candidates,
+    format_group_moments_prompt,
+    settle_group_moments,
+)
+from .domains.social.joke_boundary import (
+    joke_guard_suggestion,
+    settle_joke_boundary,
+)
 from .group_prompt_context import (
     build_group_prompt_context,
 )
@@ -1219,6 +1230,14 @@ class GroupObservationMixin:
         if _persona_value(self, "enable_group_interjection_feedback", False) and not blocked_by_guard:
             self._update_group_interjection_feedback(group, sender_id=sender_id, text=cleaned)
         self._update_group_atmosphere(group)
+        if _persona_value(self, "enable_group_social_context", False):
+            try:
+                self._update_group_social_context(group, now=now)
+            except Exception as exc:
+                logger.debug(
+                    "[PrivateCompanion] 群聊社交氛围/名场面/边界更新失败: %s",
+                    _single_line(exc, 120),
+                )
 
     def _group_observation_event_text(self, event: Any, *, limit: int = 260) -> str:
         text = _single_line(getattr(event, "message_str", ""), limit)
@@ -2377,6 +2396,116 @@ class GroupObservationMixin:
         if reset_at > now - 12 * 60:
             atmosphere["reset_at"] = reset_at
         group["atmosphere"] = atmosphere
+
+    def _update_group_social_context(self, group: dict[str, Any], *, now: float | None = None) -> None:
+        """集成入口：氛围感知 / 名场面 / 接梗边界（受分项开关控制，默认关闭）。"""
+        now = _now_ts() if now is None else max(0.0, _safe_float(now, 0))
+        if _persona_value(self, "enable_group_mood_detection", False):
+            try:
+                self._update_group_mood(group, now=now)
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 群聊氛围感知更新失败: %s", _single_line(exc, 120))
+        if _persona_value(self, "enable_group_moments", False):
+            try:
+                self._update_group_moments(group, now=now)
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 群聊名场面更新失败: %s", _single_line(exc, 120))
+        if _persona_value(self, "enable_group_joke_guard", False):
+            try:
+                self._update_group_joke_boundary(group, now=now)
+            except Exception as exc:
+                logger.debug("[PrivateCompanion] 群聊接梗边界更新失败: %s", _single_line(exc, 120))
+
+    def _update_group_mood(self, group: dict[str, Any], *, now: float) -> None:
+        messages = self._filtered_group_recent_messages(group)[-16:]
+        group["social_mood"] = settle_group_mood(
+            group.get("social_mood"),
+            messages=messages,
+            now=now,
+        )
+
+    def _update_group_moments(self, group: dict[str, Any], *, now: float) -> None:
+        messages = self._filtered_group_recent_messages(group)[-24:]
+        candidates = extract_group_moment_candidates(messages, now=now)
+        if not candidates:
+            return
+        group["social_moments"] = settle_group_moments(
+            group.get("social_moments"),
+            candidates=candidates,
+            now=now,
+        )
+
+    def _update_group_joke_boundary(self, group: dict[str, Any], *, now: float) -> None:
+        messages = self._filtered_group_recent_messages(group)[-16:]
+        group["social_joke_boundary"] = settle_joke_boundary(
+            group.get("social_joke_boundary"),
+            messages=messages,
+            now=now,
+        )
+
+    def _append_group_social_context_sections(
+        self,
+        group: dict[str, Any],
+        sections: list[dict[str, Any]],
+        *,
+        sender_id: str = "",
+        now: float | None = None,
+    ) -> None:
+        """被动管线注入：氛围摘要 / 名场面 / 扮演强度 / 玩笑边界提醒。"""
+        now = _now_ts() if now is None else max(0.0, _safe_float(now, 0))
+        mood = group.get("social_mood") if isinstance(group.get("social_mood"), dict) else None
+        if mood and _persona_value(self, "enable_group_mood_detection", False):
+            summary = summarize_group_mood(mood, now=now)
+            if summary:
+                sections.append(prompt_section("群聊氛围", summary))
+        moments = group.get("social_moments") if isinstance(group.get("social_moments"), dict) else None
+        if moments and _persona_value(self, "enable_group_moments", False):
+            rendered = format_group_moments_prompt(moments, now=now, limit=3)
+            if rendered:
+                sections.append(prompt_section("群聊名场面（可选回忆）", rendered))
+        if _persona_value(self, "enable_group_roleplay_strength", False) and mood:
+            projection = project_roleplay_strength(mood, expression_band="relaxed", now=now)
+            voice = _single_line(projection.get("voice"), 200)
+            if voice:
+                sections.append(prompt_section("扮演强度", voice))
+        if _persona_value(self, "enable_group_joke_guard", False):
+            boundary = group.get("social_joke_boundary") if isinstance(group.get("social_joke_boundary"), dict) else None
+            if boundary and sender_id:
+                guard = joke_guard_suggestion(boundary, member_id=sender_id)
+                if guard.get("blocked") or _safe_float(guard.get("sensitivity"), 0) >= 33:
+                    sections.append(prompt_section("玩笑边界提醒", guard.get("reason") or ""))
+
+    async def _note_group_joke_boundary_recall(self, group_id: str, sender_id: str) -> bool:
+        """群聊撤回事件 → 接梗边界 recall 信号（受 enable_group_joke_guard 控制）。"""
+        if not group_id or not sender_id:
+            return False
+        if not _persona_value(self, "enable_group_joke_guard", False):
+            return False
+        getter = getattr(self, "_get_group", None)
+        saver = getattr(self, "_save_data_sync", None)
+        if not callable(getter) or not callable(saver):
+            return False
+        try:
+            lock = getattr(self, "_data_lock", None)
+            if lock is not None and hasattr(lock, "__aenter__"):
+                async with lock:
+                    return self._settle_group_joke_boundary_recall(getter(group_id), sender_id, saver)
+            return self._settle_group_joke_boundary_recall(getter(group_id), sender_id, saver)
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 撤回边界信号更新失败: %s", _single_line(exc, 120))
+            return False
+
+    def _settle_group_joke_boundary_recall(self, group: Any, sender_id: str, saver: Any) -> bool:
+        if not isinstance(group, dict):
+            return False
+        now = _now_ts()
+        group["social_joke_boundary"] = settle_joke_boundary(
+            group.get("social_joke_boundary"),
+            messages=[{"sender_id": sender_id, "kind": "recall"}],
+            now=now,
+        )
+        saver(sections={"groups"})
+        return True
 
     def _group_topic_signature(self, text: str) -> str:
         return self._proactive_topic_signature(text)
