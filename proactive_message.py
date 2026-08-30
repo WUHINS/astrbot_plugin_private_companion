@@ -8689,6 +8689,19 @@ Output:
         user_id = str(getattr(session, "session_id", "") or "").strip()
         return user_id if user_id.isdigit() else ""
 
+    def _prune_last_input_status_at(self, now: float) -> None:
+        cache = getattr(self, "_last_input_status_at", None)
+        if not isinstance(cache, dict) or not cache:
+            return
+        ttl = 24 * 3600
+        stale = [k for k, v in cache.items() if now - _safe_float(v, 0) >= ttl]
+        for k in stale:
+            cache.pop(k, None)
+        max_items = 512
+        if len(cache) > max_items:
+            for k in sorted(cache, key=cache.get)[: len(cache) - max_items]:
+                cache.pop(k, None)
+
     async def _send_input_status_once(self, user_id: str, *, client: Any | None = None) -> bool:
         user_id = str(user_id or "").strip()
         if not user_id.isdigit():
@@ -8704,6 +8717,7 @@ Output:
         )
         for params in variants:
             if await self._call_onebot_action(client, "set_input_status", **params):
+                self._prune_last_input_status_at(_now_ts())
                 self._last_input_status_at[user_id] = _now_ts()
                 return True
         return False
@@ -8713,6 +8727,7 @@ Output:
         if not user_id:
             return
         now = _now_ts()
+        self._prune_last_input_status_at(now)
         last_at = _safe_float(self._last_input_status_at.get(user_id), 0)
         if now - last_at < 45:
             return

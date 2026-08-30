@@ -12958,6 +12958,32 @@ class DailyStateMixin(DailyStateTickMixin):
             include_heading=include_heading,
         )
 
+    def _passive_injection_fingerprint(self, state: dict[str, Any], now: float | None = None) -> str:
+        s = state if isinstance(state, dict) else {}
+        runtime = s.get("sleep_runtime")
+        runtime = runtime if isinstance(runtime, dict) else {}
+        now = _now_ts() if now is None else now
+        picked = {
+            "tick": int(now // 300),
+            "energy": s.get("energy"),
+            "mood": s.get("mood_bias"),
+            "sleep": s.get("sleep"),
+            "dream": s.get("dream"),
+            "health": s.get("health"),
+            "hunger": s.get("hunger"),
+            "body_cycle": s.get("body_cycle"),
+            "location": s.get("location"),
+            "sleep_phase": runtime.get("phase"),
+            "sleep_label": runtime.get("label"),
+            "sleep_event": runtime.get("last_event"),
+            "conditions": [
+                (c.get("kind"), c.get("label"), c.get("mood"), c.get("intensity"))
+                for c in (s.get("conditions") or [])
+                if isinstance(c, dict)
+            ],
+        }
+        return _single_line(json.dumps(picked, ensure_ascii=False, sort_keys=True, default=str), 800)
+
     def _prepared_lightweight_state_injection(
         self,
         state: dict[str, Any],
@@ -12979,16 +13005,19 @@ class DailyStateMixin(DailyStateTickMixin):
             cache_store = {}
         cache = cache_store.get(persona_scope)
         cache_field = "text" if include_heading else "body"
-        if isinstance(cache, dict) and not force:
-            text = str(cache.get(cache_field) or "").strip()
-            if text and cache.get("date") == _today_key() and now - _safe_float(cache.get("ts"), 0) < 60:
-                return text
+        if isinstance(cache, dict) and cache_field in cache and cache.get("fingerprint") == self._passive_injection_fingerprint(state, now):
+            return str(cache.get(cache_field) or "").strip()
         text = self._format_lightweight_state_injection(
             state,
             include_heading=include_heading,
         )
         cache = dict(cache) if isinstance(cache, dict) else {}
-        cache.update({"date": _today_key(), "ts": now, cache_field: text})
+        cache.update({
+            "date": _today_key(),
+            "ts": now,
+            cache_field: text,
+            "fingerprint": self._passive_injection_fingerprint(state, now),
+        })
         cache_store[persona_scope] = cache
         self._passive_light_injection_cache = cache_store
         return text
@@ -18283,7 +18312,9 @@ class DailyStateMixin(DailyStateTickMixin):
     async def _run_proactive_maintenance_tasks(self) -> None:
         if self._proactive_generation_disabled():
             return
-        for label, task_factory in (
+        # 分批轮换：每个 tick 周期只执行约一半维护任务，交错进行，
+        # 避免单个周期内串行跑完全部任务拉高瞬时负载；各任务内部自带到期门控。
+        tasks = (
             ("技能成长结算", self._maybe_settle_skill_growth),
             ("B站无聊观看", self._maybe_trigger_bilibili_boredom_watch),
             ("网页探索", self._maybe_trigger_web_exploration),
@@ -18291,7 +18322,12 @@ class DailyStateMixin(DailyStateTickMixin):
             ("新闻无聊阅读", self._maybe_trigger_news_boredom_read),
             ("QQ空间生活说说", self._maybe_publish_qzone_life_post),
             ("QQ空间评论收件箱", self._maybe_process_qzone_comment_inbox),
-        ):
+        )
+        batch = getattr(self, "_proactive_maintenance_batch", 0)
+        self._proactive_maintenance_batch = 1 - batch
+        for index, (label, task_factory) in enumerate(tasks):
+            if (index % 2) != batch:
+                continue
             try:
                 await task_factory()
             except Exception as exc:
@@ -18307,7 +18343,16 @@ class DailyStateMixin(DailyStateTickMixin):
 
     async def _tick(self):
         try:
-            await self._pull_body_monitor_candidates()
+            last_poll = getattr(self, "_last_body_monitor_poll_ts", 0.0)
+            poll_interval = _safe_float(
+                getattr(self, "_body_monitor_poll_interval", 90.0),
+                90.0,
+                30.0,
+                600.0,
+            )
+            if _now_ts() - last_poll >= poll_interval:
+                await self._pull_body_monitor_candidates()
+                self._last_body_monitor_poll_ts = _now_ts()
         except Exception as exc:
             logger.warning(
                 "[PrivateCompanion] Body Monitor 事件拉取失败，本轮继续执行其他主动任务: %s",
