@@ -2167,6 +2167,7 @@ class GroupObservationMixin:
                 "evidence": cleaned,
                 "updated_at": now_text,
             }
+        self._enforce_group_slang_meanings_budget(group)
 
     def _group_member_name_tokens(self, group: dict[str, Any]) -> set[str]:
         tokens: set[str] = set()
@@ -2778,6 +2779,31 @@ class GroupObservationMixin:
         if not unknown or not eligible:
             return ""
 
+        # R1/R2: cache the embedding query by its term set instead of by the raw
+        # message, and rate-limit the (network) soft recall per group.  A heated
+        # group chat would otherwise fire an embedding request for every reply.
+        now_ts = _now_ts()
+        cache_memo = getattr(self, "_group_slang_embedding_query_memo", None)
+        if not isinstance(cache_memo, dict):
+            cache_memo = {}
+            setattr(self, "_group_slang_embedding_query_memo", cache_memo)
+        group_key = str(group.get("group_id") or group.get("group_name") or "")
+        query_key = f"群聊里出现的新表达：{'、'.join(unknown[:4])}"
+        memo_key = f"{group_key}\n{query_key}"
+        memo_ttl = max(60.0, _safe_float(_persona_value(self, "group_slang_embedding_memo_ttl_seconds", 300), 300, 0))
+        memoized = cache_memo.get(memo_key)
+        if isinstance(memoized, tuple) and len(memoized) == 2 and now_ts - memoized[0] < memo_ttl:
+            return memoized[1]
+        cooldown_seconds = max(0.0, _safe_float(_persona_value(self, "group_slang_embedding_cooldown_seconds", 30), 30, 0))
+        last_run_key = f"{group_key}\nlast_run_at"
+        last_run_at = cache_memo.get(last_run_key)
+        if isinstance(last_run_at, (int, float)) and now_ts - last_run_at < cooldown_seconds:
+            return ""
+        if len(cache_memo) >= 512:
+            for stale_key in list(cache_memo)[:128]:
+                cache_memo.pop(stale_key, None)
+        cache_memo[last_run_key] = now_ts
+
         provider_getter = getattr(self, "_shared_embedding_provider", None)
         vector_getter = getattr(self, "_reaction_embedding_vector", None)
         vectors_getter = getattr(self, "_reaction_embedding_vectors", None)
@@ -2837,7 +2863,7 @@ class GroupObservationMixin:
                     results[index] = vector
             return results
 
-        query_text = f"群聊里出现的新表达：{'、'.join(unknown[:4])}；原句：{cleaned}"
+        query_text = query_key
         try:
             query_vector = await vector_for(query_text)
             if not query_vector:
@@ -2862,7 +2888,9 @@ class GroupObservationMixin:
             detail = meaning_text.split("；含义：", 1)[-1]
             lines.append(f"- 当前“{unknown[0]}”可能接近本群“{term}”：{detail}（相似度 {score:.2f}）")
         lines.append("只有结合当前原句确实说得通时才采用；不要把向量近似当成确定词义或用户纠正。")
-        return "\n".join(lines)
+        result = "\n".join(lines)
+        cache_memo[memo_key] = (now_ts, result)
+        return result
 
     def _is_uncertain_group_slang_meaning(self, meaning: str = "", usage: str = "") -> bool:
         text = _single_line(f"{meaning} {usage}", 180)
@@ -2889,6 +2917,59 @@ class GroupObservationMixin:
             if confidence < 0.55 or self._is_uncertain_group_slang_meaning(item.get("meaning"), item.get("usage")):
                 meanings.pop(term, None)
                 removed += 1
+        return removed
+
+    @staticmethod
+    def _group_slang_meaning_age_seconds(item: Any) -> float:
+        """Age of a slang_meanings entry in seconds; unknown timestamps are treated as fresh."""
+        if not isinstance(item, dict):
+            return 0.0
+        raw = item.get("updated_at") or item.get("ts")
+        if isinstance(raw, (int, float)) and raw > 1e12:
+            raw = raw / 1000.0
+        if isinstance(raw, (int, float)):
+            return max(0.0, float(_now_ts() - raw))
+        if isinstance(raw, str) and raw.strip():
+            text = raw.strip()[:19]
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    return max(0.0, float(_now_ts() - datetime.strptime(text, fmt).timestamp()))
+                except Exception:
+                    continue
+        return 0.0
+
+    def _enforce_group_slang_meanings_budget(self, group: dict[str, Any]) -> int:
+        """Cap slang_meanings size and drop stale non-pinned entries (R3).
+
+        Pinned sources (explicit_correction / manual) are user-driven and never
+        dropped; learned LLM entries age out by TTL or are evicted by confidence.
+        """
+        meanings = group.get("slang_meanings")
+        if not isinstance(meanings, dict):
+            return 0
+        max_entries = max(8, _safe_int(_persona_value(self, "max_group_slang_meanings", 120), 120, 8))
+        ttl_days = max(0, _safe_int(_persona_value(self, "group_slang_meanings_ttl_days", 180), 180, 0))
+        pinned_sources = {"explicit_correction", "manual"}
+        removed = 0
+        if ttl_days > 0:
+            ttl_seconds = float(ttl_days) * 86400
+            for term, item in list(meanings.items()):
+                if not isinstance(item, dict) or item.get("source") in pinned_sources:
+                    continue
+                if self._group_slang_meaning_age_seconds(item) > ttl_seconds:
+                    meanings.pop(term, None)
+                    removed += 1
+        while len(meanings) > max_entries:
+            candidates = [
+                (term, item)
+                for term, item in meanings.items()
+                if isinstance(item, dict) and item.get("source") not in pinned_sources
+            ]
+            if not candidates:
+                break
+            candidates.sort(key=lambda entry: _safe_float(entry[1].get("confidence"), 0.0, 0.0))
+            meanings.pop(candidates[0][0], None)
+            removed += 1
         return removed
 
     def _format_group_topic_threads_for_prompt(self, group: dict[str, Any]) -> str:
@@ -4604,12 +4685,15 @@ class GroupObservationMixin:
                 if isinstance(existing, dict) and existing.get("source") in {"explicit_correction", "manual"}:
                     continue
                 meanings[term] = payload
+            removed_budget = self._enforce_group_slang_meanings_budget(current)
             current["last_slang_summary_at"] = now
             current["group_slang_retry_after"] = 0
             current["group_slang_last_error"] = ""
             current["group_slang_running_at"] = 0
             if removed_uncertain:
                 logger.info("[PrivateCompanion] 已清理低置信度群黑话释义: group=%s removed=%s", group_id, removed_uncertain)
+            if removed_budget:
+                logger.info("[PrivateCompanion] 已按预算收缩群黑话释义: group=%s removed=%s", group_id, removed_budget)
             self._save_data_sync(sections={"groups"})
 
     async def _try_acquire_group_background_task(
