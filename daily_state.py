@@ -3494,12 +3494,11 @@ class DailyStateMixin(DailyStateTickMixin):
                     state["weather"] = self._weather_summary_text(weather)
                     return state
                 async with self._data_lock:
-                    before = json.dumps(self.data.get("daily_state", {}), ensure_ascii=False, sort_keys=True, default=str)
                     deleted_sections = self._cleanup_expired_conditions() or set()
                     self._ensure_time_based_hunger_condition()
                     state = self._compose_state_from_conditions(weather)
-                    after = json.dumps(state, ensure_ascii=False, sort_keys=True, default=str)
-                    if before != after or deleted_sections:
+                    existing_state = self.data.get("daily_state")
+                    if (not isinstance(existing_state, dict) or existing_state != state) or deleted_sections:
                         self.data["daily_state"] = state
                         save_sections = {
                             "daily_state",
@@ -7379,7 +7378,7 @@ class DailyStateMixin(DailyStateTickMixin):
         try:
             import aiohttp
 
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
                 async with session.get(url) as response:
                     if response.status != 200:
                         logger.debug(f"[PrivateCompanion] 天气请求失败: {response.status}")
@@ -10466,16 +10465,94 @@ class DailyStateMixin(DailyStateTickMixin):
             blocks.append(f"【主要用户:{name}｜{source_note}】\n" + "\n".join(selected))
         return "\n\n".join(blocks).strip()[-18000:]
 
-    def _load_conversation_history_items(self, conversation: Conversation | None) -> list[dict[str, Any]]:
+    def _load_conversation_history_items(
+        self,
+        conversation: Conversation | None,
+        *,
+        tail_only: int | None = None,
+    ) -> list[dict[str, Any]]:
         if conversation is None:
             return []
+        raw = conversation.history or "[]"
+        if tail_only is not None and tail_only > 0:
+            tail = self._parse_tail_json_items(raw, tail_only)
+            if tail is not None:
+                return tail
         try:
-            loaded = json.loads(conversation.history or "[]")
+            loaded = json.loads(raw)
         except Exception:
             return []
         if not isinstance(loaded, list):
             return []
         return [item for item in loaded if isinstance(item, dict)]
+
+    @staticmethod
+    def _parse_tail_json_items(raw: str, count: int) -> list[dict[str, Any]] | None:
+        """仅反序列化 JSON 数组从尾部往回数 count 个 dict 元素，避免对超大
+        conversation.history 全量 json.loads。
+
+        从右向左逆序扫描元素边界：字符串按"左侧连续反斜杠个数的奇偶性"判定转义
+        引号（奇数 => 转义、偶数 => 定界），从而正确区分字符串、嵌套括号与顶层
+        逗号；对每个尾部元素单独解码，遇到 dict 才计数，语义与"全量解析后过滤
+        dict 再取尾部 count 条"完全一致。任何解析异常、结构不符或不足 count 个
+        时返回 None，由调用方回退全量解析，正确性始终有保证。
+        """
+        if not count or count < 1:
+            return None
+        text = raw.strip()
+        if not (text.startswith("[") and text.endswith("]")):
+            return None
+        end = len(text) - 1  # 数组右括号下标
+        stop = end  # 当前元素区间的右边界(不含)
+        i = end - 1
+        depth = 0
+        in_string = False
+        found: list[dict[str, Any]] = []
+
+        def _collect(span_start: int, span_stop: int) -> bool:
+            try:
+                item = json.loads(text[span_start:span_stop])
+            except Exception:
+                return False
+            if isinstance(item, dict):
+                found.append(item)
+                return len(found) == count
+            return False
+
+        while i >= 0:
+            ch = text[i]
+            if in_string:
+                if ch == '"':
+                    # 判定左侧连续反斜杠个数的奇偶：奇数 => 转义引号，属字符串内容
+                    j = i - 1
+                    bs = 0
+                    while j >= 0 and text[j] == "\\":
+                        bs += 1
+                        j -= 1
+                    if bs % 2 == 1:
+                        i = j  # 跳过该反斜杠串，继续留在字符串内
+                        continue
+                    in_string = False
+                i -= 1
+                continue
+            if ch == '"':
+                in_string = True
+            elif ch in "]}":
+                depth += 1
+            elif ch in "[{":
+                if depth == 0:
+                    # 回溯到数组左括号：当前为第一个元素
+                    if _collect(i + 1, stop) and len(found) == count:
+                        return found[::-1]
+                    return None
+                depth -= 1
+            elif ch == "," and depth == 0:
+                span_start = i + 1
+                if _collect(span_start, stop):
+                    return found[::-1]
+                stop = i
+            i -= 1
+        return None
 
     @staticmethod
     def _daily_proactive_archive_context_text(text: str) -> bool:

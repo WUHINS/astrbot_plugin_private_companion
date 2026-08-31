@@ -4469,7 +4469,7 @@ class ProactiveMessageMixin(FinalResponsePersistenceMixin):
         if umo:
             try:
                 conv = await self._get_current_conversation_safely(umo, label="proactive_review_history_read")
-                history = self._load_conversation_history_items(conv)
+                history = self._load_conversation_history_items(conv, tail_only=max(1, limit))
                 for item in history[-max(1, limit):]:
                     line = self._format_history_item_for_summary(item)
                     if line:
@@ -10721,6 +10721,25 @@ Output:
                 _single_line(exc, 120),
             )
 
+    async def _append_photo_generation_trace_event_async(
+        self,
+        trace_id: str,
+        stage: str,
+        *,
+        status: str = "ok",
+        data: dict[str, Any] | None = None,
+        context: dict[str, Any] | None = None,
+    ) -> None:
+        # trace 文件追加涉及 path.stat() 与写盘，从事件循环移到线程池。
+        await asyncio.to_thread(
+            self._append_photo_generation_trace_event,
+            trace_id,
+            stage,
+            status=status,
+            data=data,
+            context=context,
+        )
+
     def _record_recent_photo_generation(
         self,
         *,
@@ -14350,7 +14369,7 @@ Output:
             model_attempted=model_attempted,
             model_selected_id=model_selected_id,
         )
-        self._append_photo_generation_trace_event(
+        await self._append_photo_generation_trace_event_async(
             trace_id,
             "reference_candidates",
             data={

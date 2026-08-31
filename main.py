@@ -2476,6 +2476,14 @@ class PrivateCompanionPlugin(
         handle = self._load_secondary_persona_store_sync(pid)
         handle.manager.save_snapshot(deepcopy(payload))
 
+    async def _save_persona_profile_async(
+        self,
+        persona_id: str,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        # 全量快照写盘可能耗时（JSON 序列化 + SQLite 事务），从事件循环移到线程池。
+        await asyncio.to_thread(self._save_persona_profile_sync, persona_id, data)
+
     def _write_persona_reset_backup_sync(
         self,
         persona_id: str,
@@ -3554,7 +3562,8 @@ class PrivateCompanionPlugin(
     ) -> dict[str, Any]:
         await self._flush_scheduled_data_save()
         async with self._data_lock:
-            return self._migrate_persona_profile(
+            return await asyncio.to_thread(
+                self._migrate_persona_profile,
                 source_persona_id,
                 target_persona_id,
                 keys,
@@ -3772,7 +3781,7 @@ class PrivateCompanionPlugin(
             if pid not in ids:
                 ids.append(pid)
             try:
-                self._save_persona_profile_sync(pid, next_profile)
+                await self._save_persona_profile_async(pid, next_profile)
                 _set_into_config(self.config, "multi_persona_ids", ids)
                 config_saved = bool(await self._save_config_if_possible())
                 if not config_saved:
@@ -3781,7 +3790,7 @@ class PrivateCompanionPlugin(
                 _set_into_config(self.config, "multi_persona_ids", before_config)
                 try:
                     if existed:
-                        self._save_persona_profile_sync(pid, before_profile)
+                        await self._save_persona_profile_async(pid, before_profile)
                     else:
                         registry = getattr(self, "_persona_sqlite_store_registry", None)
                         discard = getattr(registry, "discard", None)
@@ -3857,7 +3866,7 @@ class PrivateCompanionPlugin(
             ):
                 self._clear_persona_runtime_cache(next_profile)
             try:
-                self._save_persona_profile_sync(pid, next_profile)
+                await self._save_persona_profile_async(pid, next_profile)
             except Exception as exc:
                 return {"ok": False, "code": "persona_settings_persistence_failed", "message": f"人格配置保存失败: {_single_line(exc, 120)}"}
             profile.clear()
