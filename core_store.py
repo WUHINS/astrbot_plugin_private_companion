@@ -24,7 +24,7 @@ import time
 import unicodedata
 import uuid
 import zoneinfo
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from contextvars import ContextVar
 from copy import deepcopy
 from datetime import date, datetime, timedelta
@@ -36,7 +36,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from xml.etree import ElementTree as ET
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 try:
     from astrbot.api.message_components import At, Image, Plain, Record, Reply
@@ -130,6 +130,7 @@ from .relationship_ledger import (
     normalize_relationship_positive_stage_cap_key,
 )
 from .storage.store_manager import StoreManager
+from .storage.path_generation import capture_write_ticket, replace_if_ticket_current
 from .person_context_contract import empty_person_store, ensure_person_store
 from .photo_generation_scope import (
     PHOTO_GENERATION_SCOPE_LABELS,
@@ -138,6 +139,17 @@ from .photo_generation_scope import (
     normalize_photo_generation_scope_limit,
 )
 from .persona_config import runtime_persona_setting
+from .story_authority import (
+    StoryAuthorityError,
+    story_authority_controller,
+    story_legacy_operation,
+    story_legacy_sync_operation,
+    story_startup_sync_operation,
+)
+from .story_handoff import (
+    STORY_MIGRATION_COMMIT_KEY,
+    preflight_story_handoff_sections,
+)
 from .unified_profile_service import (
     DEFAULT_CLOSED_REPAIR_OPERATION_ID,
     ensure_legacy_profile_capabilities,
@@ -157,6 +169,9 @@ from .planning import (
     normalize_story_plan,
     pick_detail_segment,
 )
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 
 DEFAULT_AI_DAILY_NEWS_SOURCE = "B站 AI早报|bilibili:285286947"
@@ -326,6 +341,7 @@ _DURABLE_SECTION_NAMES = frozenset(
         "daily_story_plan",
         "daily_story_plan_history",
         "bot_personal_outbox",
+        "bot_personal_archive_revisions",
         "skill_growth",
         "detail_enhanced_day",
         "detail_enhanced_segments",
@@ -347,6 +363,7 @@ _DURABLE_SECTION_NAMES = frozenset(
         "memo_notes",
         "creative_projects",
         "creative_memory_pool",
+        STORY_MIGRATION_COMMIT_KEY,
         "proactive_candidate_pool",
         "proactive_runtime",
         "proactive_review_runtime",
@@ -666,7 +683,7 @@ class CoreStoreMixin:
             os.replace(temporary, path)
         except OSError as exc:
             logger.warning(
-                "[PrivateCompanion] 后端状态标记写入失败，不影响当前存储: %s",
+                "后端状态标记写入失败，不影响当前存储: %s",
                 _single_line(exc, 160),
             )
         finally:
@@ -674,6 +691,47 @@ class CoreStoreMixin:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
+
+    def _assert_primary_store_startup_safe(self, manager: Any) -> None:
+        """Reject ambiguous empty startup while preserving true first install."""
+
+        json_backend = getattr(manager, "json_backend", None)
+        sqlite_backend = getattr(manager, "sqlite_backend", None)
+        json_exists = getattr(json_backend, "exists", None)
+        sqlite_exists = getattr(sqlite_backend, "exists", None)
+        if not callable(json_exists) or not callable(sqlite_exists):
+            # Lightweight test/downgrade managers are validated by their own
+            # loader.  Production StoreManager always exposes both backends.
+            return
+        if bool(json_exists()) or bool(sqlite_exists()):
+            return
+
+        data_dir = Path(getattr(self, "data_dir", "") or self._storage_backend_state_path().parent)
+        evidence: list[str] = []
+        marker = self._storage_backend_state_path()
+        if marker.exists() or marker.is_symlink():
+            evidence.append(marker.name)
+        try:
+            for entry in data_dir.iterdir():
+                if entry == marker:
+                    continue
+                name = entry.name
+                if not name or name.startswith(".nfs"):
+                    continue
+                evidence.append(name)
+                if len(evidence) >= 8:
+                    break
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            raise RuntimeError(
+                "无法确认陪伴数据目录是否为首次安装；为避免空状态覆盖，已中止启动"
+            ) from exc
+        if evidence:
+            raise RuntimeError(
+                "陪伴主状态 JSON 与 SQLite 同时缺失，但检测到既有安装证据 "
+                f"({', '.join(sorted(set(evidence)))}); 请恢复数据文件或显式清空数据目录后重试"
+            )
 
     def _legacy_json_is_newer_than_sqlite(self, sqlite_path: Path) -> bool:
         """Detect a pre-marker JSON->SQLite switch without trusting a stale mirror."""
@@ -684,6 +742,74 @@ class CoreStoreMixin:
             return False
         return json_mtime - sqlite_mtime > 1_000_000_000
 
+    def _preflight_story_handoff_store_managers(
+        self,
+        *managers: Any,
+        extra_sections: Collection[Mapping[str, Any]] = (),
+    ) -> None:
+        """Validate every plausible startup source before any store write."""
+
+        candidates: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        try:
+            for manager in managers:
+                if manager is None:
+                    continue
+                backend = str(getattr(manager, "backend_name", "") or "").lower()
+                path = str(
+                    getattr(
+                        manager,
+                        "sqlite_path" if backend == "sqlite" else "data_file",
+                        "",
+                    )
+                    or ""
+                )
+                identity = (backend, path)
+                if identity not in seen:
+                    candidates.append(
+                        manager.load_sections(
+                            (STORY_MIGRATION_COMMIT_KEY,),
+                            read_only=True,
+                        )
+                    )
+                    seen.add(identity)
+                # An uninitialized SQLite target imports the JSON source during
+                # load_initial_store. Validate that source before migration writes.
+                if backend == "sqlite":
+                    json_path = str(getattr(manager, "data_file", "") or "")
+                    json_identity = ("json", json_path)
+                    if json_identity not in seen:
+                        candidates.append(
+                            manager.load_sections(
+                                (STORY_MIGRATION_COMMIT_KEY,),
+                                backend_name="json",
+                                read_only=True,
+                            )
+                        )
+                        seen.add(json_identity)
+            candidates.extend(dict(value) for value in extra_sections)
+            preflight_story_handoff_sections(*candidates)
+        except StoryAuthorityError:
+            raise
+        except Exception:
+            controller = story_authority_controller()
+            controller.block("story_handoff_marker_preflight_unavailable")
+            raise StoryAuthorityError(
+                "story_handoff_marker_preflight_unavailable"
+            ) from None
+
+    @staticmethod
+    def _restore_committed_story_roots(
+        data: dict[str, Any],
+        baseline: dict[str, tuple[bool, Any]],
+    ) -> None:
+        for section, (present, value) in baseline.items():
+            if present:
+                data[section] = value
+            else:
+                data.pop(section, None)
+
+    @story_startup_sync_operation("store.manager.rebuild")
     def _rebuild_store_manager(self, *, reload_data: bool = False) -> None:
         backend = str(getattr(self, "storage_backend", "json") or "json").strip().lower() or "json"
         if backend not in {"json", "sqlite"}:
@@ -706,7 +832,7 @@ class CoreStoreMixin:
             if invalid_reason:
                 sqlite_path = default_sqlite_path
                 logger.warning(
-                    "[PrivateCompanion] SQLite 数据文件路径无效，已回退默认路径: configured=%s reason=%s fallback=%s",
+                    "SQLite 数据文件路径无效，已回退默认路径: configured=%s reason=%s fallback=%s",
                     configured_sqlite_path,
                     invalid_reason,
                     default_sqlite_path,
@@ -779,7 +905,11 @@ class CoreStoreMixin:
                 sqlite_path=sqlite_path,
                 ensure_defaults=self._ensure_store_defaults,
                 new_store=self._new_store,
+                persistence_owner_token=str(
+                    getattr(self, "_persistence_owner_token", "") or ""
+                ),
             )
+            source_manager = None
             if not reload_data and migration_source_backend:
                 source_sqlite_path = migration_source_sqlite_path or default_sqlite_path
                 source_manager = StoreManager(
@@ -788,7 +918,16 @@ class CoreStoreMixin:
                     sqlite_path=source_sqlite_path,
                     ensure_defaults=self._ensure_store_defaults,
                     new_store=self._new_store,
+                    persistence_owner_token=str(
+                        getattr(self, "_persistence_owner_token", "") or ""
+                    ),
                 )
+            self._preflight_story_handoff_store_managers(
+                next_manager,
+                source_manager,
+                extra_sections=(previous_data,) if isinstance(previous_data, dict) else (),
+            )
+            if source_manager is not None:
                 source_backend = (
                     source_manager.sqlite_backend
                     if migration_source_backend == "sqlite"
@@ -803,7 +942,7 @@ class CoreStoreMixin:
                             next_manager.backend.save_store(deepcopy(source_data))
                         self._advance_data_save_write_generation()
                     logger.info(
-                        "[PrivateCompanion] 已从 %s 后端迁移到 %s 后端",
+                        "已从 %s 后端迁移到 %s 后端",
                         migration_source_backend,
                         backend,
                     )
@@ -834,7 +973,7 @@ class CoreStoreMixin:
                     )
                 except Exception as restore_exc:
                     logger.error(
-                        "[PrivateCompanion] Failed to restore storage switch target: %s",
+                        "Failed to restore storage switch target: %s",
                         _single_line(restore_exc, 200),
                     )
             if reload_data and previous_manager is not None:
@@ -877,14 +1016,14 @@ class CoreStoreMixin:
                             await result
                         return True
                     except Exception as retry_exc:
-                        logger.warning("[PrivateCompanion] 自动保存配置重试失败: %s", _single_line(retry_exc, 120))
+                        logger.warning("自动保存配置重试失败: %s", _single_line(retry_exc, 120))
                         return False
-                logger.warning("[PrivateCompanion] 自动保存配置失败: %s", _single_line(exc, 120))
+                logger.warning("自动保存配置失败: %s", _single_line(exc, 120))
                 return False
             except Exception as exc:
-                logger.warning("[PrivateCompanion] 自动保存配置失败: %s", _single_line(exc, 120))
+                logger.warning("自动保存配置失败: %s", _single_line(exc, 120))
                 return False
-        logger.warning("[PrivateCompanion] 当前配置对象没有可用保存方法，本次修改未落盘")
+        logger.warning("当前配置对象没有可用保存方法，本次修改未落盘")
         return False
 
     def _set_runtime_bool_config(self, key: str, value: bool) -> None:
@@ -915,7 +1054,7 @@ class CoreStoreMixin:
                     token = getattr(self, "_activate_persona_id", lambda _pid: None)(persona_id)
                     if token is None:
                         logger.info(
-                            "[PrivateCompanion] 跳过尚未创建独立配置的人格启动任务: persona=%s",
+                            "跳过尚未创建独立配置的人格启动任务: persona=%s",
                             _single_line(persona_id, 96),
                         )
                         continue
@@ -927,7 +1066,7 @@ class CoreStoreMixin:
                             await self._maybe_settle_skill_growth()
                         except Exception as exc:
                             logger.warning(
-                                "[PrivateCompanion] 启动初始化人格失败，继续处理其他人格: persona=%s error=%s",
+                                "启动初始化人格失败，继续处理其他人格: persona=%s error=%s",
                                 _single_line(persona_id, 96),
                                 _single_line(exc, 160),
                             )
@@ -943,7 +1082,7 @@ class CoreStoreMixin:
             await self._ensure_daily_diary()
             await self._maybe_settle_skill_growth()
         except Exception as e:
-            logger.warning(f"[PrivateCompanion] 启动时生成今日日志失败: {e}", exc_info=True)
+            logger.warning(f"启动时生成今日日志失败: {e}", exc_info=True)
 
     def _has_today_diary(self) -> bool:
         diaries = self.data.get("bot_diaries", [])
@@ -957,6 +1096,13 @@ class CoreStoreMixin:
     def _new_store(self) -> dict[str, Any]:
         return {
             "version": DATA_VERSION,
+            "primary_store_ownership": {
+                "schema_version": 1,
+                "owner_persona_id": "",
+                "active_persona_id": "",
+                "status": "unattributed",
+                "history": [],
+            },
             "users": {},
             "private_user_alias_merge_backups": {},
             "groups": {},
@@ -1000,6 +1146,7 @@ class CoreStoreMixin:
             "daily_story_plan": {},
             "daily_story_plan_history": [],
             "bot_personal_outbox": [],
+            "bot_personal_archive_revisions": {},
             "skill_growth": {},
             "detail_enhanced_day": "",
             "detail_enhanced_segments": {},
@@ -1111,6 +1258,22 @@ class CoreStoreMixin:
     @staticmethod
     def _ensure_store_defaults(data: dict[str, Any]) -> dict[str, Any]:
         data.setdefault("version", DATA_VERSION)
+        ownership = data.get("primary_store_ownership")
+        if not isinstance(ownership, dict):
+            data["primary_store_ownership"] = {
+                "schema_version": 1,
+                "owner_persona_id": "",
+                "active_persona_id": "",
+                "status": "unattributed",
+                "history": [],
+            }
+        else:
+            ownership.setdefault("schema_version", 1)
+            ownership.setdefault("owner_persona_id", "")
+            ownership.setdefault("active_persona_id", "")
+            ownership.setdefault("status", "unattributed")
+            if not isinstance(ownership.get("history"), list):
+                ownership["history"] = []
         data.setdefault("users", {})
         data.setdefault("private_user_alias_merge_backups", {})
         data.setdefault("groups", {})
@@ -1154,6 +1317,7 @@ class CoreStoreMixin:
         data.setdefault("daily_story_plan", {})
         data.setdefault("daily_story_plan_history", [])
         data.setdefault("bot_personal_outbox", [])
+        data.setdefault("bot_personal_archive_revisions", {})
         data.setdefault("skill_growth", {})
         data.setdefault("detail_enhanced_day", "")
         data.setdefault("detail_enhanced_segments", {})
@@ -1385,7 +1549,7 @@ class CoreStoreMixin:
             else ""
         )
         logger.info(
-            "[PrivateCompanion] Store safety cleanup: stage=%s fields=%s%s",
+            "Store safety cleanup: stage=%s fields=%s%s",
             key,
             changed,
             suffix,
@@ -1643,12 +1807,12 @@ class CoreStoreMixin:
             recovered = max(0, int(recoverer(data) or 0))
         except Exception as exc:
             logger.warning(
-                "[PrivateCompanion] 启动恢复夹层本地书页失败，已保留现有存储: %s",
+                "启动恢复夹层本地书页失败，已保留现有存储: %s",
                 _single_line(exc, 160),
             )
             return 0
         if recovered:
-            logger.warning("[PrivateCompanion] 已根据本地书页和删除记录校准夹层书库: changed=%s", recovered)
+            logger.warning("已根据本地书页和删除记录校准夹层书库: changed=%s", recovered)
         return recovered
 
     def _persist_startup_maintenance_sync(
@@ -1722,11 +1886,124 @@ class CoreStoreMixin:
             )
         self._refresh_data_save_revision_from_manager()
 
+    def _primary_store_owner_id(self) -> str:
+        getter = getattr(self, "_primary_persona_id", None)
+        if callable(getter):
+            try:
+                return str(getter() or "").strip()
+            except Exception:
+                pass
+        return str(getattr(self, "plugin_specific_persona_id", "") or "").strip()
+
+    def _ensure_primary_store_ownership(self, data: dict[str, Any]) -> bool:
+        """Annotate the legacy primary store without changing its contents."""
+        if not isinstance(data, dict):
+            return False
+        before = deepcopy(data.get("primary_store_ownership"))
+        self._ensure_store_defaults(data)
+        ownership = data.get("primary_store_ownership")
+        if not isinstance(ownership, dict):
+            ownership = {
+                "schema_version": 1,
+                "owner_persona_id": "",
+                "active_persona_id": "",
+                "status": "unattributed",
+                "history": [],
+            }
+            data["primary_store_ownership"] = ownership
+        current = self._primary_store_owner_id()
+        owner = str(ownership.get("owner_persona_id") or "").strip()
+        if not owner and current:
+            ownership["owner_persona_id"] = current
+            ownership["status"] = "bound"
+        ownership["active_persona_id"] = current
+        if owner and current and owner != current:
+            ownership["status"] = "pending_review"
+            warning = {
+                "code": "primary_store_owner_mismatch",
+                "owner_persona_id": owner,
+                "active_persona_id": current,
+                "message": "主存储仍绑定旧主人格；请在确认备份后决定保留、迁移或合并历史。",
+            }
+            self._primary_store_ownership_warning = warning
+            logger.warning(
+                "检测到主存储人格归属变化: owner=%s active=%s",
+                owner,
+                current,
+            )
+        else:
+            self._primary_store_ownership_warning = {}
+        return before != ownership
+
+    def _record_primary_persona_change(self, old_persona_id: Any, new_persona_id: Any) -> dict[str, Any]:
+        """Record a primary-ID change and preserve a recoverable local snapshot."""
+        old_id = str(old_persona_id or "").strip()
+        new_id = str(new_persona_id or "").strip()
+        if old_id == new_id:
+            return {}
+        data = getattr(self, "_data_default", None)
+        if not isinstance(data, dict):
+            return {"code": "primary_store_snapshot_unavailable", "message": "主存储尚未加载，未执行归属记录"}
+        self._ensure_store_defaults(data)
+        ownership = data.get("primary_store_ownership")
+        if not isinstance(ownership, dict):
+            ownership = {
+                "schema_version": 1,
+                "owner_persona_id": "",
+                "active_persona_id": "",
+                "status": "unattributed",
+                "history": [],
+            }
+            data["primary_store_ownership"] = ownership
+        owner = str(ownership.get("owner_persona_id") or old_id).strip()
+        backup_path = ""
+        try:
+            root = Path(str(getattr(self, "data_dir", "") or Path(str(getattr(self, "data_file", "companions.json"))).parent))
+            root.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+            backup = root / f"companions.json.primary-switch-{stamp}.bak"
+            backup.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            backup_path = str(backup)
+        except Exception as exc:
+            logger.warning("主人格切换快照写入失败: %s", _single_line(exc, 180))
+        history = ownership.setdefault("history", [])
+        if not isinstance(history, list):
+            history = []
+            ownership["history"] = history
+        history.append({
+            "at": datetime.now().isoformat(timespec="seconds"),
+            "from_persona_id": owner,
+            "to_persona_id": new_id,
+            "backup_path": backup_path,
+            "status": "pending_review",
+        })
+        del history[:-20]
+        ownership["owner_persona_id"] = owner
+        ownership["active_persona_id"] = new_id
+        ownership["status"] = "pending_review"
+        warning = {
+            "code": "primary_store_owner_mismatch",
+            "owner_persona_id": owner,
+            "active_persona_id": new_id,
+            "backup_path": backup_path,
+            "message": "主人格已变更，companions.json 的历史归属未自动迁移；请依据备份进行保留、迁移或合并。",
+        }
+        self._primary_store_ownership_warning = warning
+        try:
+            self._write_data_snapshot_sync(deepcopy(data))
+        except Exception as exc:
+            logger.warning("主人格归属审计写入失败: %s", _single_line(exc, 180))
+            warning["persist_error"] = _single_line(exc, 180)
+        return warning
+
     def _load_data_sync(self) -> dict[str, Any]:
         manager = getattr(self, "store_manager", None)
         if manager is not None:
             try:
+                self._assert_primary_store_startup_safe(manager)
+                self._preflight_story_handoff_store_managers(manager)
                 data = manager.load_initial_store()
+                preflight_story_handoff_sections(data)
                 manager_backend = str(
                     getattr(manager, "backend_name", "") or ""
                 ).lower()
@@ -1744,16 +2021,23 @@ class CoreStoreMixin:
                         )
                     )
                 before_maintenance = deepcopy(data)
+                story_baseline = {
+                    section: (section in data, deepcopy(data.get(section)))
+                    for section in ("creative_projects", "creative_memory_pool")
+                }
                 changed = self._sanitize_store_control_tags_inplace(data)
                 repeat_changed = self._sanitize_proactive_candidate_repeat_counts_inplace(data)
                 compacted = self._compact_store_history_inplace(data)
                 bookshelf_recovered = self._recover_bookshelf_after_load(data)
+                if story_authority_controller().authority_state() == "committed":
+                    self._restore_committed_story_roots(data, story_baseline)
                 if changed:
-                    logger.warning("[PrivateCompanion] 启动读取数据时清理非标准控制标签: fields=%s", changed)
+                    logger.warning("启动读取数据时清理非标准控制标签: fields=%s", changed)
                 if repeat_changed:
-                    logger.warning("[PrivateCompanion] 启动读取数据时压缩主动候选重复计数: items=%s", repeat_changed)
+                    logger.warning("启动读取数据时压缩主动候选重复计数: items=%s", repeat_changed)
                 if compacted:
-                    logger.info("[PrivateCompanion] 启动读取数据时压缩历史存储: %s", compacted)
+                    logger.info("启动读取数据时压缩历史存储: %s", compacted)
+                self._ensure_primary_store_ownership(data)
                 self._persist_startup_maintenance_sync(
                     manager,
                     before_maintenance,
@@ -1767,35 +2051,133 @@ class CoreStoreMixin:
                 return data
             except Exception as exc:
                 logger.error(
-                    "[PrivateCompanion] StoreManager 读取失败，为避免用空数据覆盖原存储，已中止加载: %s",
+                    "StoreManager 读取失败，为避免用空数据覆盖原存储，已中止加载: %s",
                     _single_line(exc, 200),
                 )
                 raise
         if not os.path.exists(self.data_file):
-            return self._new_store()
+            data = self._new_store()
+            self._ensure_primary_store_ownership(data)
+            return data
         try:
             with open(self.data_file, "r", encoding="utf-8") as f:
                 data = json.load(f)
             if not isinstance(data, dict):
                 raise ValueError("数据文件根节点必须是 JSON 对象")
             data = self._ensure_store_defaults(data)
+            preflight_story_handoff_sections(data)
+            story_baseline = {
+                section: (section in data, deepcopy(data.get(section)))
+                for section in ("creative_projects", "creative_memory_pool")
+            }
             changed = self._sanitize_store_control_tags_inplace(data)
             repeat_changed = self._sanitize_proactive_candidate_repeat_counts_inplace(data)
             compacted = self._compact_store_history_inplace(data)
             self._recover_bookshelf_after_load(data)
+            if story_authority_controller().authority_state() == "committed":
+                self._restore_committed_story_roots(data, story_baseline)
             if changed:
-                logger.warning("[PrivateCompanion] 启动读取 JSON 时清理非标准控制标签: fields=%s", changed)
+                logger.warning("启动读取 JSON 时清理非标准控制标签: fields=%s", changed)
             if repeat_changed:
-                logger.warning("[PrivateCompanion] 启动读取 JSON 时压缩主动候选重复计数: items=%s", repeat_changed)
+                logger.warning("启动读取 JSON 时压缩主动候选重复计数: items=%s", repeat_changed)
             if compacted:
-                logger.info("[PrivateCompanion] 启动读取 JSON 时压缩历史存储: %s", compacted)
+                logger.info("启动读取 JSON 时压缩历史存储: %s", compacted)
+            ownership_changed = self._ensure_primary_store_ownership(data)
+            if ownership_changed:
+                self._write_data_snapshot_sync(deepcopy(data))
             return data
         except Exception as exc:
             logger.error(
-                "[PrivateCompanion] 读取已有 JSON 数据失败，为避免覆盖原文件，已中止加载: %s",
+                "读取已有 JSON 数据失败，为避免覆盖原文件，已中止加载: %s",
                 _single_line(exc, 200),
             )
             raise
+
+    def _read_story_migration_commit_persisted_sync(
+        self,
+    ) -> tuple[bool, Any]:
+        """Read only the durable Story marker from the active primary store."""
+
+        manager = getattr(self, "store_manager", None)
+        if manager is not None:
+            sections = manager.load_sections((STORY_MIGRATION_COMMIT_KEY,))
+        else:
+            path = Path(str(getattr(self, "data_file", "") or ""))
+            if not path.is_file():
+                return False, None
+            with path.open("r", encoding="utf-8") as stream:
+                root = json.load(stream)
+            if type(root) is not dict:
+                raise RuntimeError("Story marker store root is not an object")
+            sections = root
+        if STORY_MIGRATION_COMMIT_KEY not in sections:
+            return False, None
+        return True, deepcopy(sections[STORY_MIGRATION_COMMIT_KEY])
+
+    def _save_story_migration_commit_confirmed_sync(
+        self,
+        marker: Mapping[str, Any],
+    ) -> None:
+        """Synchronously persist and read back the exact marker section."""
+
+        expected = deepcopy(dict(marker))
+        data = getattr(self, "_data_default", None)
+        if type(data) is not dict:
+            data = getattr(self, "data", None)
+        if (
+            type(data) is not dict
+            or data.get(STORY_MIGRATION_COMMIT_KEY) != expected
+        ):
+            raise RuntimeError("Story marker memory baseline changed before save")
+        tracked_maps = (
+            "_data_save_dirty",
+            "_data_save_deleted",
+            "_data_save_dirty_since",
+            "_data_save_section_revisions",
+        )
+        tracking = {
+            name: (
+                STORY_MIGRATION_COMMIT_KEY in value,
+                deepcopy(value.get(STORY_MIGRATION_COMMIT_KEY)),
+            )
+            for name in tracked_maps
+            if isinstance((value := getattr(self, name, None)), dict)
+        }
+
+        def clear_confirmed_marker_tracking() -> None:
+            for name in ("_data_save_dirty", "_data_save_deleted", "_data_save_dirty_since"):
+                value = getattr(self, name, None)
+                if isinstance(value, dict):
+                    value.pop(STORY_MIGRATION_COMMIT_KEY, None)
+
+        def restore_marker_tracking() -> None:
+            for name, (present, value) in tracking.items():
+                current = getattr(self, name, None)
+                if not isinstance(current, dict):
+                    continue
+                if present:
+                    current[STORY_MIGRATION_COMMIT_KEY] = value
+                else:
+                    current.pop(STORY_MIGRATION_COMMIT_KEY, None)
+
+        last_error: BaseException | None = None
+        for _attempt in range(3):
+            try:
+                self._save_data_now_sync(sections={STORY_MIGRATION_COMMIT_KEY})
+            except BaseException as exc:
+                last_error = exc
+            try:
+                present, persisted = self._read_story_migration_commit_persisted_sync()
+            except BaseException as exc:
+                last_error = exc
+                continue
+            if present and persisted == expected:
+                clear_confirmed_marker_tracking()
+                return
+        restore_marker_tracking()
+        if last_error is not None:
+            raise RuntimeError("Story marker durable save failed") from last_error
+        raise RuntimeError("Story marker durable readback mismatch")
 
     def _save_data_sync(
         self,
@@ -1964,7 +2346,7 @@ class CoreStoreMixin:
                         manager.export_current_to_json(mirror)
                     except Exception as exc:
                         logger.debug(
-                            "[PrivateCompanion] SQLite 快照镜像 JSON 写出失败: %s",
+                            "SQLite 快照镜像 JSON 写出失败: %s",
                             _single_line(exc, 160),
                         )
                 else:
@@ -1975,15 +2357,24 @@ class CoreStoreMixin:
                     mirror = deepcopy(data)
                     self._strip_ephemeral_group_transcripts_inplace(mirror)
                     manager.save_snapshot(mirror)
-                self._refresh_data_save_revision_from_manager()
-                if advance_generation:
-                    self._advance_data_save_write_generation()
+                status_getter = getattr(manager, "persistence_status", None)
+                status = (
+                    {"accepted": True, "state": "saved", "backend": "sqlite"}
+                    if getattr(self, "storage_backend", "json") == "sqlite"
+                    else status_getter() if callable(status_getter) else {}
+                )
+                self._last_persistence_write_status = dict(status or {})
+                accepted = status.get("accepted") is not False
+                if accepted:
+                    self._refresh_data_save_revision_from_manager()
+                    if advance_generation:
+                        self._advance_data_save_write_generation()
             return changed
         with self._data_save_io_lock():
             mirror = deepcopy(data)
             self._strip_ephemeral_group_transcripts_inplace(mirror)
-            self._atomic_write_data_file_sync(mirror)
-            if advance_generation:
+            accepted = self._atomic_write_data_file_sync(mirror)
+            if accepted and advance_generation:
                 self._advance_data_save_write_generation()
         return changed
 
@@ -2008,8 +2399,12 @@ class CoreStoreMixin:
             return writer(snapshot, advance_generation=advance_generation)
         return writer(snapshot)
 
-    def _atomic_write_data_file_sync(self, data: dict[str, Any]) -> None:
+    def _atomic_write_data_file_sync(self, data: dict[str, Any]) -> bool:
         base = self.data_file
+        ticket = capture_write_ticket(
+            base,
+            str(getattr(self, "_persistence_owner_token", "") or ""),
+        )
         tmp_file = f"{base}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
         try:
             with open(tmp_file, "w", encoding="utf-8") as f:
@@ -2019,21 +2414,26 @@ class CoreStoreMixin:
                     os.fsync(f.fileno())
                 except OSError:
                     pass
-            last_exc: Exception | None = None
-            for attempt in range(6):
-                try:
-                    os.replace(tmp_file, base)
-                    return
-                except PermissionError as exc:
-                    last_exc = exc
-                    time.sleep(0.05 * (attempt + 1))
-                except OSError as exc:
-                    last_exc = exc
-                    if getattr(exc, "winerror", 0) not in {32, 33, 5}:
-                        raise
-                    time.sleep(0.05 * (attempt + 1))
-            if last_exc:
-                raise last_exc
+            accepted = replace_if_ticket_current(tmp_file, base, ticket)
+            self._last_persistence_write_status = {
+                "accepted": accepted,
+                "state": "saved" if accepted else "superseded",
+                "path": str(base),
+                "owner": str(ticket.get("owner") or ""),
+                "generation": int(ticket.get("generation") or 0),
+                "sequence": int(ticket.get("sequence") or 0),
+            }
+            return accepted
+        except Exception:
+            self._last_persistence_write_status = {
+                "accepted": False,
+                "state": "failed",
+                "path": str(base),
+                "owner": str(ticket.get("owner") or ""),
+                "generation": int(ticket.get("generation") or 0),
+                "sequence": int(ticket.get("sequence") or 0),
+            }
+            raise
         finally:
             try:
                 if os.path.exists(tmp_file):
@@ -2165,6 +2565,15 @@ class CoreStoreMixin:
             self._data_save_write_generation = generation
         return generation
 
+    def _default_data_for_save(self) -> dict[str, Any]:
+        """Return the primary store independently of the event persona context."""
+
+        data = getattr(self, "_data_default", None)
+        if type(data) is dict:
+            return data
+        fallback = getattr(self, "data", None)
+        return fallback if type(fallback) is dict else {}
+
     def _ensure_default_save_state(self) -> None:
         legacy_dirty = getattr(self, "_data_save_dirty", None) is True
         if not isinstance(getattr(self, "_data_save_dirty", None), dict):
@@ -2194,7 +2603,7 @@ class CoreStoreMixin:
         if legacy_dirty and not self._data_save_dirty and not self._data_save_deleted:
             revision = self._next_data_save_revision()
             now = time.monotonic()
-            live_data = getattr(self, "data", {})
+            live_data = self._default_data_for_save()
             for section in live_data if isinstance(live_data, dict) else ():
                 self._data_save_dirty[str(section)] = revision
                 self._data_save_dirty_since[str(section)] = now
@@ -2299,12 +2708,17 @@ class CoreStoreMixin:
         )
         full = changed is None
         if changed is None:
-            changed = {str(name) for name in self.data}
+            changed = {str(name) for name in self._default_data_for_save()}
         if changed & deleted:
             raise ValueError("changed and deleted sections must be disjoint")
         if not changed and not deleted and not full:
             return False
-        self._expand_bookshelf_save_sections(self.data, changed, deleted, self._data_save_deleted)
+        self._expand_bookshelf_save_sections(
+            self._default_data_for_save(),
+            changed,
+            deleted,
+            self._data_save_deleted,
+        )
         revision = self._next_data_save_revision()
         now = time.monotonic()
         for section in changed:
@@ -2467,7 +2881,7 @@ class CoreStoreMixin:
             and not full_replacement
         )
         batch = self._capture_data_save_batch(
-            self.data,
+            self._default_data_for_save(),
             self._data_save_dirty,
             self._data_save_deleted,
             self._data_save_full_revision,
@@ -2500,7 +2914,7 @@ class CoreStoreMixin:
                 pass
             except Exception as exc:
                 logger.debug(
-                    "[PrivateCompanion] Waiting for the default incremental writer "
+                    "Waiting for the default incremental writer "
                     "during shutdown failed: %s",
                     _single_line(exc, 160),
                 )
@@ -2658,13 +3072,21 @@ class CoreStoreMixin:
                         primary_snapshot = deepcopy(snapshot)
                         self._strip_ephemeral_group_transcripts_inplace(primary_snapshot)
                         manager.save_snapshot(primary_snapshot)
+                        status_getter = getattr(manager, "persistence_status", None)
+                        status = status_getter() if callable(status_getter) else {}
+                        self._last_persistence_write_status = dict(status or {})
+                        if status.get("accepted") is False:
+                            superseded = True
                     else:
                         # Keep the compatibility path behind the overridable
                         # snapshot writer used by JSON/test harnesses.
+                        self._last_persistence_write_status = {"accepted": None, "state": "writing"}
                         self._invoke_data_snapshot_writer_sync(
                             snapshot,
                             advance_generation=False,
                         )
+                        if getattr(self, "_last_persistence_write_status", {}).get("accepted") is False:
+                            superseded = True
                     if not superseded:
                         if advance_generation:
                             self._advance_data_save_write_generation()
@@ -2841,7 +3263,7 @@ class CoreStoreMixin:
         if result.get("superseded"):
             return
         complete = self._finish_data_save_batch(
-            self.data,
+            self._default_data_for_save(),
             batch,
             result,
             self._data_save_dirty,
@@ -2945,7 +3367,7 @@ class CoreStoreMixin:
                     except Exception as exc:
                         failures += 1
                         logger.warning(
-                            "[PrivateCompanion] Delayed data save failed: %s",
+                            "Delayed data save failed: %s",
                             _single_line(exc, 160),
                         )
                         if self._save_is_stopping():
@@ -2964,7 +3386,7 @@ class CoreStoreMixin:
         try:
             self._data_save_task = asyncio.create_task(_runner())
         except RuntimeError:
-            snapshot = deepcopy(self.data)
+            snapshot = deepcopy(self._default_data_for_save())
             self._write_data_snapshot_sync(snapshot)
             self._clear_default_data_save_dirty()
 
@@ -2993,7 +3415,7 @@ class CoreStoreMixin:
                     except Exception as exc:
                         failures += 1
                         logger.warning(
-                            "[PrivateCompanion] Delayed persona data save failed: "
+                            "Delayed persona data save failed: "
                             "persona=%s error=%s",
                             persona_id,
                             _single_line(exc, 160),
@@ -3177,6 +3599,7 @@ class CoreStoreMixin:
             if self._default_data_save_is_dirty():
                 self._start_default_data_save_writer(0.0)
 
+    @story_legacy_operation("store.plugin.reset")
     async def _reset_plugin_store(self) -> None:
         async with self._data_lock:
             self.data = self._new_store()
@@ -3219,7 +3642,7 @@ class CoreStoreMixin:
                 except Exception as exc:
                     self.data["daily_diary_postprocess_error"] = _single_line(exc, 180)
                     logger.warning(
-                        "[PrivateCompanion] 重建今日日记已保存,但梦境碎片合并失败: %s",
+                        "重建今日日记已保存,但梦境碎片合并失败: %s",
                         _single_line(exc, 180),
                     )
                 story_plan = diary.get("story_plan") if isinstance(diary, dict) else None
@@ -3240,7 +3663,7 @@ class CoreStoreMixin:
                     await outfit_generator(diary)
                 except Exception as exc:
                     logger.warning(
-                        "[PrivateCompanion] 重建今日日记已保存,但每日穿搭照片生成失败: %s",
+                        "重建今日日记已保存,但每日穿搭照片生成失败: %s",
                         _single_line(exc, 180),
                     )
         return state, plan, diary
@@ -3921,7 +4344,7 @@ class CoreStoreMixin:
                 users.pop(raw_user_id, None)
                 transport_changed = True
                 logger.info(
-                    "[PrivateCompanion] 已归一旧私聊 UMO 用户键: old=%s user=%s",
+                    "已归一旧私聊 UMO 用户键: old=%s user=%s",
                     _single_line(raw_id, 120),
                     _single_line(canonical_id, 80),
                 )
@@ -4296,7 +4719,7 @@ class CoreStoreMixin:
 
         if removed:
             logger.info(
-                "[PrivateCompanion] 已清理群聊链路遗留的私聊占位记录: count=%s ids=%s",
+                "已清理群聊链路遗留的私聊占位记录: count=%s ids=%s",
                 len(removed),
                 ",".join(removed[:12]),
             )
@@ -4598,7 +5021,7 @@ class CoreStoreMixin:
                         "dual_write": "failed",
                     })
                 logger.warning(
-                    "[PrivateCompanion] REQ-041 关系双写失败，已暂停新读切换并保留 legacy 写入: %s",
+                    "REQ-041 关系双写失败，已暂停新读切换并保留 legacy 写入: %s",
                     _single_line(exc, 160),
                 )
         if result.get("changed") or score_migration.get("changed"):
@@ -5285,7 +5708,7 @@ class CoreStoreMixin:
                 if not bool(getattr(self, "_empty_group_whitelist_warning_logged", False)):
                     self._empty_group_whitelist_warning_logged = True
                     logger.warning(
-                        "[PrivateCompanion] 群聊观察已开启但白名单为空,当前不会观察任何群；"
+                        "群聊观察已开启但白名单为空,当前不会观察任何群；"
                         "请在群聊观测页把目标群加入白名单,或改用黑名单模式: first_group=%s",
                         _single_line(group_id, 80) or "-",
                     )

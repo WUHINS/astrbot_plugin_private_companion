@@ -85,6 +85,22 @@ def test_resolver_uses_short_negative_cache_and_registered_star_fallback() -> No
     ) is not None
 
 
+def test_resolver_accepts_direct_plugin_instance_from_exact_registry_lookup() -> None:
+    api = SimpleNamespace(status=lambda: {"enabled": True})
+    plugin = SimpleNamespace(extension_api=api)
+    owner = SimpleNamespace(
+        context=SimpleNamespace(get_registered_star=lambda _name: plugin)
+    )
+
+    assert resolve_external_bridge(
+        owner,
+        cache_key="direct-instance",
+        module_names=("astrbot_plugin_direct_bridge.main",),
+        getter_name="get_direct_api",
+        star_name="astrbot_plugin_direct_bridge",
+    ) is api
+
+
 def test_disabled_plugin_remains_discoverable_as_installed() -> None:
     api = SimpleNamespace(status=lambda: {"enabled": False, "available": False})
     module_name = "astrbot_plugin_disabled_bridge.main"
@@ -177,6 +193,55 @@ def test_resolver_uses_current_registered_star_before_stale_module_alias() -> No
             sys.modules[module_name] = previous
 
 
+def test_registry_absence_is_authoritative_over_stale_module_alias() -> None:
+    stale_api = SimpleNamespace(status=lambda: {"enabled": True})
+    module_name = "astrbot_plugin_absent_bridge.main"
+    stale_module = types.ModuleType(module_name)
+    stale_module.get_absent_api = lambda: stale_api
+    owner = SimpleNamespace(
+        context=SimpleNamespace(
+            get_all_stars=lambda: [],
+            get_registered_star=lambda _name: None,
+        )
+    )
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = stale_module
+    try:
+        assert resolve_external_bridge(
+            owner,
+            cache_key="absent",
+            module_names=(module_name,),
+            getter_name="get_absent_api",
+            star_name="astrbot_plugin_absent_bridge",
+        ) is None
+    finally:
+        invalidate_external_bridge_cache(owner)
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+
+
+def test_same_named_getter_does_not_establish_module_identity() -> None:
+    rogue_name = "unrelated.rogue_bridge"
+    rogue = types.ModuleType(rogue_name)
+    rogue.get_missing_api = lambda: SimpleNamespace(status=lambda: {"enabled": True})
+    previous = sys.modules.get(rogue_name)
+    sys.modules[rogue_name] = rogue
+    try:
+        candidates = _module_candidates(
+            ("astrbot_plugin_missing_bridge.main",),
+            getter_name="get_missing_api",
+            star_name="astrbot_plugin_missing_bridge",
+        )
+        assert rogue not in candidates
+    finally:
+        if previous is None:
+            sys.modules.pop(rogue_name, None)
+        else:
+            sys.modules[rogue_name] = previous
+
+
 def test_registered_star_identity_can_expose_extension_api_without_fixed_module_name() -> None:
     api = SimpleNamespace(status=lambda: {"enabled": False})
     plugin = SimpleNamespace(extension_api=api)
@@ -249,6 +314,100 @@ def test_module_scan_ignores_unstringifiable_plugin_name() -> None:
             sys.modules.pop(module_name, None)
         else:
             sys.modules[module_name] = previous
+
+
+def test_resolver_prefers_registered_instance_over_its_stale_module_global() -> None:
+    stale_api = SimpleNamespace(status=lambda: {"enabled": True})
+    current_api = SimpleNamespace(status=lambda: {"enabled": True})
+    module = types.ModuleType("data.plugins.astrbot_plugin_instance_bridge.main")
+    module.get_instance_api = lambda: stale_api
+    metadata = SimpleNamespace(
+        activated=True,
+        name="astrbot_plugin_instance_bridge",
+        root_dir_name="astrbot_plugin_instance_bridge",
+        module_path=module.__name__,
+        module=module,
+        star_cls=SimpleNamespace(extension_api=current_api),
+    )
+    owner = SimpleNamespace(
+        context=SimpleNamespace(
+            get_all_stars=lambda: [metadata],
+            get_registered_star=lambda _name: metadata,
+        )
+    )
+
+    assert resolve_external_bridge(
+        owner,
+        cache_key="instance",
+        module_names=(module.__name__,),
+        getter_name="get_instance_api",
+        star_name="astrbot_plugin_instance_bridge",
+    ) is current_api
+
+
+def test_resolver_can_prefer_live_module_getter_for_singleton_extensions() -> None:
+    stale_api = SimpleNamespace(status=lambda: {"enabled": True})
+    current_api = SimpleNamespace(status=lambda: {"enabled": True})
+    module = types.ModuleType("data.plugins.astrbot_plugin_image_companion.main")
+    module.get_image_api = lambda: current_api
+    metadata = SimpleNamespace(
+        activated=True,
+        name="astrbot_plugin_image_companion",
+        root_dir_name="astrbot_plugin_image_companion",
+        module_path=module.__name__,
+        module=module,
+        star_cls=SimpleNamespace(extension_api=stale_api),
+    )
+    owner = SimpleNamespace(
+        context=SimpleNamespace(
+            get_all_stars=lambda: [metadata],
+            get_registered_star=lambda _name: metadata,
+        )
+    )
+
+    assert resolve_external_bridge(
+        owner,
+        cache_key="image",
+        module_names=(module.__name__,),
+        getter_name="get_image_api",
+        star_name="astrbot_plugin_image_companion",
+        prefer_module_getter=True,
+    ) is current_api
+
+
+def test_resolver_prefers_exact_registry_entry_over_older_matching_candidate() -> None:
+    stale_api = SimpleNamespace(status=lambda: {"enabled": True})
+    current_api = SimpleNamespace(status=lambda: {"enabled": True})
+    stale_metadata = SimpleNamespace(
+        activated=True,
+        name="astrbot_plugin_duplicate_bridge",
+        root_dir_name="astrbot_plugin_duplicate_bridge",
+        module_path="data.plugins.astrbot_plugin_duplicate_bridge.old",
+        module=None,
+        star_cls=SimpleNamespace(extension_api=stale_api),
+    )
+    current_metadata = SimpleNamespace(
+        activated=True,
+        name="astrbot_plugin_duplicate_bridge",
+        root_dir_name="astrbot_plugin_duplicate_bridge",
+        module_path="data.plugins.astrbot_plugin_duplicate_bridge.main",
+        module=None,
+        star_cls=SimpleNamespace(extension_api=current_api),
+    )
+    owner = SimpleNamespace(
+        context=SimpleNamespace(
+            get_all_stars=lambda: [stale_metadata, current_metadata],
+            get_registered_star=lambda _name: current_metadata,
+        )
+    )
+
+    assert resolve_external_bridge(
+        owner,
+        cache_key="duplicate",
+        module_names=(),
+        getter_name="get_duplicate_api",
+        star_name="astrbot_plugin_duplicate_bridge",
+    ) is current_api
 
 
 def test_module_scan_does_not_trigger_unrelated_lazy_imports() -> None:

@@ -12,6 +12,8 @@ import unittest
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +24,7 @@ if PACKAGE not in sys.modules:
     sys.modules[PACKAGE] = module
 
 from req036_companion.unified_person_registry import UnifiedPersonRegistry
+from req036_companion.identity_namespace import NamespaceContext
 from req036_companion.unified_profile_contract import (
     CONTRACT_FINGERPRINT,
     build_person_ref,
@@ -80,9 +83,12 @@ def _load_method(name: str) -> Any:
     ast.fix_missing_locations(module)
     namespace: dict[str, Any] = {
         "Any": Any,
+        "asyncio": asyncio,
         "AstrMessageEvent": Any,
         "ProviderRequest": Any,
+        "hashlib": hashlib,
         "DEFAULT_UNAUTHORIZED_PRIVATE_REPLY": DEFAULT_UNAUTHORIZED_PRIVATE_REPLY,
+        "hashlib": hashlib,
         "logger": types.SimpleNamespace(
             debug=lambda *_args, **_kwargs: None,
             info=lambda *_args, **_kwargs: None,
@@ -93,6 +99,28 @@ def _load_method(name: str) -> Any:
         "_safe_float": lambda value, default=0.0: float(value or default),
         "_single_line": lambda value, limit=240: str(value or "").strip()[:limit],
         "runtime_persona_setting": lambda host, key, default=None: getattr(host, key, default),
+        "NamespaceContext": NamespaceContext,
+        "req036_build_person_ref": build_person_ref,
+        "req036_build_portrait_request": build_portrait_request,
+        "re": re,
+    }
+    exec(compile(module, str(ROOT / "main.py"), "exec"), namespace)
+    return namespace[name]
+
+
+def _load_sync_method(name: str) -> Any:
+    source = (ROOT / "main.py").read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    owner = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "PrivateCompanionPlugin")
+    method = next(node for node in owner.body if isinstance(node, ast.FunctionDef) and node.name == name)
+    method = copy.deepcopy(method)
+    method.decorator_list = []
+    module = ast.Module(body=[method], type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace: dict[str, Any] = {
+        "Any": Any,
+        "re": re,
+        "_single_line": lambda value, limit=240: str(value or "").strip()[:limit],
     }
     exec(compile(module, str(ROOT / "main.py"), "exec"), namespace)
     return namespace[name]
@@ -103,6 +131,9 @@ REQ036_EARLY_GATE = _load_method("guard_req036_private_capability_early")
 REQ036_GROUP_GATE = _load_method("guard_req036_group_portrait_queries")
 REQ036_COMMAND_GATE = _load_method("companion_command")
 REQ036_REJECT = _load_method("_req036_reject_unauthorized_private_event")
+REQ036_PREFERRED_ADDRESS = _load_method("_req036_preferred_address_from_portrait")
+REQ036_CLASSIFY = _load_sync_method("_req036_group_portrait_query_kind")
+REQ036_IS_DIRECTED = _load_sync_method("_req036_group_portrait_query_is_directed")
 
 
 def _load_async_function(path: Path, name: str) -> Any:
@@ -607,6 +638,87 @@ class Req036CompanionTests(unittest.TestCase):
         self.assertEqual("disabled", summary["portrait_mode"])
         self.assertFalse(summary["portrait_learning_enabled"])
         self.assertFalse(summary["portrait_usage_enabled"])
+
+    def test_latest_portrait_preferred_address_overrides_platform_display_name(self) -> None:
+        person = _person_projection("p")
+        namespace_context = NamespaceContext(
+            kind="private",
+            persona_id="default",
+            identity_id=person["person_id"],
+            group_id="",
+            assurance="verified",
+            profile_status="active",
+            policy_version="req041.v1",
+            migration_epoch="epoch-1",
+        )
+        reader = AsyncMock(
+            return_value={
+                "ok": True,
+                "items": [
+                    {
+                        "dimension": "preferred_address",
+                        "summary": "希望被称为 星桥M30",
+                        "epistemic_status": "explicit",
+                    }
+                ],
+            }
+        )
+
+        class Host:
+            @staticmethod
+            def _req036_capability_summary_for_user(_user: Any) -> dict[str, Any]:
+                return {"portrait_usage_enabled": True}
+
+            @staticmethod
+            def get_unified_person_projection(_person_id: str) -> dict[str, Any]:
+                return person
+
+            @staticmethod
+            def _memory_companion_bridge() -> Any:
+                return types.SimpleNamespace(read_unified_profile_portrait=reader)
+
+            @staticmethod
+            def _req041_scoped_context_for_user(
+                _user: Any, *, kind: str, purpose: str
+            ) -> NamespaceContext:
+                if kind != "private" or purpose != "profile_read":
+                    raise AssertionError("unexpected portrait namespace request")
+                return namespace_context
+
+        user = {
+            "unified_person_id": person["person_id"],
+            "nickname": "tester-01",
+        }
+        preferred = asyncio.run(REQ036_PREFERRED_ADDRESS(Host(), user))
+
+        self.assertEqual("星桥M30", preferred)
+        request = reader.await_args.args[0]
+        self.assertEqual(person["person_id"], request["requester_person_id"])
+        self.assertEqual(person["person_id"], request["target_person_id"])
+        self.assertEqual("private", request["scope"])
+        self.assertEqual(namespace_context.to_dict(), request["namespace_context"])
+
+        Host._req036_capability_summary_for_user = staticmethod(
+            lambda _user: {"portrait_usage_enabled": False}
+        )
+        self.assertEqual("", asyncio.run(REQ036_PREFERRED_ADDRESS(Host(), user)))
+        self.assertEqual(1, reader.await_count)
+
+    def test_private_request_prefers_portrait_address_before_display_name(self) -> None:
+        source = (ROOT / "passive_state_pipeline.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "inject_humanized_state"
+        )
+        rendered = ast.unparse(function)
+        self.assertIn("await portrait_address_reader(private_user)", rendered)
+        self.assertIn(
+            "preferred_address = portrait_preferred_address or _single_address",
+            rendered,
+        )
 
     def test_administrator_update_records_only_capability_audit(self) -> None:
         user: dict[str, Any] = {"unified_profile_capabilities": default_capabilities()}
@@ -1647,6 +1759,32 @@ class Req036CompanionTests(unittest.TestCase):
         self.assertEqual("", classify("@bot 你觉得喜欢什么"))
         self.assertEqual("", classify("@bot 我想知道喜欢什么"))
         self.assertEqual("", classify("小王的爱好是跑步"))
+        self.assertEqual("", classify("@bot 现在干啥都提不起兴趣"))
+        self.assertEqual("", classify("现在干啥都提不起兴趣"))
+        self.assertEqual("", classify("对啥都不感兴趣"))
+        self.assertEqual("", classify("@bot 没兴趣，不想动"))
+        self.assertEqual("", classify("干啥都毫无兴趣"))
+        self.assertEqual("third_party", classify("@bot 小王的兴趣是什么"))
+        self.assertEqual("third_party", classify("@bot 他有什么兴趣"))
+
+    def test_group_portrait_classifier_ignores_item_taste_questions(self) -> None:
+        self.assertEqual("", REQ036_CLASSIFY("要喂什么口味的💩"))
+        self.assertEqual("", REQ036_CLASSIFY("这个选什么口味"))
+        self.assertEqual("third_party", REQ036_CLASSIFY("小王喜欢什么"))
+
+    def test_listener_wake_without_structured_address_is_not_directed(self) -> None:
+        event = SimpleNamespace(
+            is_wake=True,
+            is_at_or_wake_command=False,
+        )
+        host = SimpleNamespace(
+            _event_scene_signals=lambda _event: {
+                "at_targets": [],
+                "self_id": "bot-1",
+                "reply_to_id": "",
+            }
+        )
+        self.assertFalse(REQ036_IS_DIRECTED(host, event))
 
     def test_group_third_party_guard_applies_when_observation_is_disabled(self) -> None:
         host = _GroupGateHost()
@@ -1757,6 +1895,23 @@ class Req036CompanionTests(unittest.TestCase):
         self.assertTrue(user["unified_profile_capabilities"]["proactive_private_enabled"])
         self.assertEqual("configured_target_capability_reconciliation", user["unified_profile_capabilities"]["grant_source"])
         self.assertTrue(user["enabled"])
+
+    def test_configured_target_alias_id_cannot_reopen_capability(self) -> None:
+        host = _LegacyTargetMigrationHost()
+        user = {
+            "user_id": "different-user",
+            "identity_subject_id": "different-user",
+            "identity_platform_kind": "onebot",
+            "alias_user_ids": ["legacy-target"],
+            "unified_profile_capabilities": default_capabilities(grant_source="legacy_effective_migration"),
+            "proactive_daily_limit": 1,
+        }
+        self.assertFalse(REQ036_CONFIGURED_TARGET_MIGRATION(host, "different-user", user))
+        target_named_shadow = {
+            **user,
+            "user_id": "legacy-target",
+        }
+        self.assertFalse(REQ036_CONFIGURED_TARGET_MIGRATION(host, "legacy-target", target_named_shadow))
 
     def test_scoped_reconciliation_keeps_platforms_and_manual_disables_isolated(self) -> None:
         host = _LegacyTargetMigrationHost()

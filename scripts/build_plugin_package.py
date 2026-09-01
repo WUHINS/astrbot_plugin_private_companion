@@ -22,12 +22,14 @@ RUNTIME_FILES = (
 )
 RUNTIME_DIRECTORIES = (
     ".astrbot-plugin",
+    "companion",
     "domains",
     "pages",
     "storage",
 )
 REQUIRED_ARCHIVE_FILES = (
     "main.py",
+    "logging_util.py",
     "metadata.yaml",
     "_conf_schema.json",
     "requirements.txt",

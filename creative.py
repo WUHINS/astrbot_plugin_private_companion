@@ -29,6 +29,11 @@ from .constants import (
 )
 from .helpers import _now_ts, _path_text, _safe_float, _safe_int, _single_line, _text_similarity
 from .persona_config import runtime_persona_setting
+from .story_authority import (
+    story_legacy_context,
+    story_legacy_operation,
+    story_legacy_sync_operation,
+)
 
 
 def _persona_provider_id(owner: Any, canonical_key: str, legacy_attr: str, quick_role: str) -> str:
@@ -170,29 +175,49 @@ class CreativeMixin:
     """创作系统"""
 
     def _creative_projects(self) -> list[dict[str, Any]]:
-        projects = self.data.setdefault("creative_projects", [])
-        if not isinstance(projects, list):
-            projects = []
-            self.data["creative_projects"] = projects
-        valid_projects = [item for item in projects if isinstance(item, dict)]
+        projects = self.data.get("creative_projects")
+        valid_projects = (
+            [item for item in projects if isinstance(item, dict)]
+            if isinstance(projects, list)
+            else []
+        )
+        needs_normalize = not isinstance(projects, list)
         for project in valid_projects:
-            project.setdefault("work_type", "短篇小说")
             point_of_view = _single_line(project.get("point_of_view"), 40)
-            if not point_of_view:
-                project["point_of_view"] = "第三人称有限视角"
-                project.setdefault("point_of_view_policy_version", 2)
-                continue
-            if (
+            needs_normalize = needs_normalize or "work_type" not in project
+            needs_normalize = needs_normalize or not point_of_view
+            needs_normalize = needs_normalize or bool(
                 "第一人称" in point_of_view
                 and not project.get("point_of_view_policy_version")
                 and "书信" not in point_of_view
                 and "日记" not in point_of_view
                 and "手记" not in point_of_view
-            ):
-                project["point_of_view"] = "第三人称有限视角"
-                project["point_of_view_note"] = "legacy_first_person_rebalanced"
-                project["point_of_view_policy_version"] = 2
-        return valid_projects
+            )
+        if not needs_normalize:
+            return valid_projects
+        with story_legacy_context("creative.projects.normalize"):
+            if not isinstance(projects, list):
+                projects = []
+                self.data["creative_projects"] = projects
+            valid_projects = [item for item in projects if isinstance(item, dict)]
+            for project in valid_projects:
+                project.setdefault("work_type", "短篇小说")
+                point_of_view = _single_line(project.get("point_of_view"), 40)
+                if not point_of_view:
+                    project["point_of_view"] = "第三人称有限视角"
+                    project.setdefault("point_of_view_policy_version", 2)
+                    continue
+                if (
+                    "第一人称" in point_of_view
+                    and not project.get("point_of_view_policy_version")
+                    and "书信" not in point_of_view
+                    and "日记" not in point_of_view
+                    and "手记" not in point_of_view
+                ):
+                    project["point_of_view"] = "第三人称有限视角"
+                    project["point_of_view_note"] = "legacy_first_person_rebalanced"
+                    project["point_of_view_policy_version"] = 2
+            return valid_projects
 
     def _creative_chars_per_session(self) -> int:
         style = str(runtime_persona_setting(self, "default_style", "温柔") or "")
@@ -323,6 +348,7 @@ class CreativeMixin:
             for item in (*CREATIVE_FALLBACK_CHUNKS, *CREATIVE_LEGACY_FALLBACK_CHUNKS)
         }
 
+    @story_legacy_sync_operation("creative.startup.cleanup")
     def _cleanup_legacy_creative_fallback_chunks(self) -> bool:
         projects = self.data.get("creative_projects") if isinstance(getattr(self, "data", None), dict) else None
         if not isinstance(projects, list):
@@ -372,7 +398,7 @@ class CreativeMixin:
             cleaned_projects += 1
         if removed_chunks:
             logger.info(
-                "[PrivateCompanion] 已清理资料柜旧版固定兜底片段: projects=%s chunks=%s memories=%s",
+                "已清理资料柜旧版固定兜底片段: projects=%s chunks=%s memories=%s",
                 cleaned_projects,
                 removed_chunks,
                 removed_memories,
@@ -449,6 +475,7 @@ class CreativeMixin:
     # Story Bible / Memory Pool / Outline / Characters
     # ============================================================
 
+    @story_legacy_sync_operation("creative.story-bible.ensure")
     def _get_or_create_story_bible(self, project: dict[str, Any]) -> dict[str, Any]:
         story_bible = project.get("story_bible")
         if not isinstance(story_bible, dict):
@@ -461,6 +488,7 @@ class CreativeMixin:
                 story_bible[key] = deepcopy(default)
         return story_bible
 
+    @story_legacy_sync_operation("creative.memory-pool.ensure")
     def _get_or_create_memory_pool(self, project: dict[str, Any]) -> list[dict[str, Any]]:
         pool = project.get("creative_memory_pool")
         if not isinstance(pool, list):
@@ -502,6 +530,7 @@ class CreativeMixin:
         scored.sort(key=lambda x: (x[0], _safe_float(x[1].get("created_at"), 0.0)), reverse=True)
         return [e for _, e in scored[:limit]]
 
+    @story_legacy_sync_operation("creative.memory-entry.add")
     def _add_memory_entry(
         self, pool: list[dict[str, Any]], project_id: str,
         entry_type: str, content: Any, keywords: list[str], importance: int = 2,
@@ -541,8 +570,9 @@ class CreativeMixin:
     def _get_project_characters(self, project: dict[str, Any]) -> list[dict[str, Any]]:
         chars = project.get("characters")
         if not isinstance(chars, list):
-            chars = []
-            project["characters"] = chars
+            with story_legacy_context("creative.characters.normalize"):
+                chars = []
+                project["characters"] = chars
         return [c for c in chars if isinstance(c, dict)]
 
     def _normalize_outline_text(self, text: Any) -> str:
@@ -694,7 +724,7 @@ class CreativeMixin:
                     max_chars=900,
                 )
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 创作立项 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
+                logger.debug("创作立项 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
         prompt = f"""
  你是一个拟人化 Bot 的私人创作状态生成器。这个 Bot/角色会因为一个生活小事、日记碎片或梦境灵感,突然想开一个自己的创作项目。
 
@@ -800,6 +830,7 @@ class CreativeMixin:
     # Outline Generation
     # ============================================================
 
+    @story_legacy_operation("creative.outline.generate")
     async def _generate_outline_for_chunk(
         self, project: dict[str, Any], story_bible: dict[str, Any],
         memories: list[dict[str, Any]], budget: int,
@@ -831,7 +862,7 @@ class CreativeMixin:
                     max_chars=850,
                 )
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 创作大纲 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
+                logger.debug("创作大纲 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
         prompt = f"""
 你在为一个私人创作项目安排本次要写的一小段,先给出简短大纲。
 
@@ -915,7 +946,7 @@ class CreativeMixin:
                     max_chars=850,
                 )
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 创作审稿 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
+                logger.debug("创作审稿 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
         prompt = f"""
 你是一个严格但懂文风的审稿人。检查这段私人创作片段是否满足：贴合人格、推进作品、避免重复。
 
@@ -981,6 +1012,7 @@ class CreativeMixin:
     # Post-Generation Extraction
     # ============================================================
 
+    @story_legacy_operation("creative.chunk.extract")
     async def _post_generation_extract(
         self, project: dict[str, Any], story_bible: dict[str, Any],
         new_chunk_text: str, chunk_index: int,
@@ -1003,7 +1035,7 @@ class CreativeMixin:
                     max_chars=700,
                 )
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 创作抽取 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
+                logger.debug("创作抽取 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
         prompt = f"""
 整理一个长期创作项目刚写出的新片段,提取对后续续写最有用的结构化信息。
 
@@ -1124,6 +1156,7 @@ class CreativeMixin:
     # Manual Edit
     # ============================================================
 
+    @story_legacy_operation("creative.manual-edit")
     async def _apply_creative_manual_edit(
         self, project_id: str, edit_type: str, edit_content: str,
         edit_title: str = "", chunk_index: int = -1,
@@ -1202,6 +1235,7 @@ class CreativeMixin:
             self._save_data_sync(sections={"creative_projects"})
             return {"success": True, "project_id": project_id, "edit_type": normalized_type}
 
+    @story_legacy_operation("creative.memory.rebuild")
     async def _rebuild_creative_memory_from_project(self, project_id: str) -> dict[str, Any]:
         async with self._data_lock:
             projects = self._creative_projects()
@@ -1267,6 +1301,7 @@ class CreativeMixin:
     # Core Chunk Generation (with story_bible + outline + review)
     # ============================================================
 
+    @story_legacy_operation("creative.chunk.generate")
     async def _generate_creative_chunk(self, project: dict[str, Any], budget: int) -> str:
         chunks = project.get("draft_chunks") if isinstance(project.get("draft_chunks"), list) else []
         recent = "\n".join(_single_line((item or {}).get("text"), 240) for item in chunks[-3:] if isinstance(item, dict))
@@ -1314,7 +1349,7 @@ class CreativeMixin:
                     max_chars=1000,
                 )
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 创作续写 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
+                logger.debug("创作续写 我会牢牢记住你 上下文读取失败: %s", _single_line(exc, 120))
 
         async def _do_generate(extra_notice: str = "") -> str:
             story_time = _single_line(story_bible.get("story_time"), 60)
@@ -1426,6 +1461,7 @@ class CreativeMixin:
             extra_notice = "注意重写：" + " ".join(notes)
         return ""
 
+    @story_legacy_sync_operation("creative.project.defer")
     def _defer_creative_project_advance(
         self,
         project: dict[str, Any],
@@ -1441,8 +1477,9 @@ class CreativeMixin:
         project["next_advance_at"] = now + delay_minutes * 60
         return delay_minutes
 
+    @story_legacy_operation("creative.project.start")
     async def _maybe_start_creative_project(self, *, idle_checked: bool = False) -> bool:
-        if not runtime_persona_setting(self, "enable_creative_writing", True):
+        if not runtime_persona_setting(self, "enable_creative_writing", False):
             return False
         if not idle_checked and not self._bot_currently_idle_for_creative_writing():
             return False
@@ -1477,7 +1514,7 @@ class CreativeMixin:
             del projects[:-20]
             self.data["creative_projects"] = projects
             self._save_data_sync(sections={"creative_projects"})
-        logger.info("[PrivateCompanion] 新增创作项目: %s / %s", project.get("work_type"), project.get("title"))
+        logger.info("新增创作项目: %s / %s", project.get("work_type"), project.get("title"))
         return True
 
     @staticmethod
@@ -1785,6 +1822,7 @@ class CreativeMixin:
             1800,
         )
 
+    @story_legacy_operation("creative.cover.store")
     async def _store_creative_cover_image(self, project_id: str, image_path: str) -> str:
         source_text = _path_text(image_path, 1000)
         if not source_text:
@@ -1801,9 +1839,10 @@ class CreativeMixin:
                 await asyncio.to_thread(shutil.copy2, source, target)
             return str(target)
         except Exception as exc:
-            logger.warning("[PrivateCompanion] 创作封面保存失败: project=%s error=%s", project_id, _single_line(exc, 160))
+            logger.warning("创作封面保存失败: project=%s error=%s", project_id, _single_line(exc, 160))
             return ""
 
+    @story_legacy_operation("creative.cover.generate")
     async def _maybe_generate_creative_cover(self, project_id: str, *, force: bool = False) -> dict[str, Any] | None:
         if not force and not bool(
             runtime_persona_setting(self, "enable_creative_cover_generation", False)
@@ -1881,7 +1920,7 @@ class CreativeMixin:
                         )
                     except Exception as exc:
                         logger.warning(
-                            "[PrivateCompanion] 创作封面读取人物参考图失败: project=%s error=%s",
+                            "创作封面读取人物参考图失败: project=%s error=%s",
                             project_id,
                             _single_line(exc, 160),
                         )
@@ -1951,17 +1990,18 @@ class CreativeMixin:
                     project["cover_generation_status"] = "ready"
                     project["cover_generation_error"] = ""
                     project["cover_generation_next_retry_at"] = 0
-                    logger.info("[PrivateCompanion] 创作封面已生成: project=%s backend=%s path=%s", project_id, _single_line(backend, 80), _single_line(stored_path, 180))
+                    logger.info("创作封面已生成: project=%s backend=%s path=%s", project_id, _single_line(backend, 80), _single_line(stored_path, 180))
                 else:
                     project["cover_generation_status"] = "failed"
                     project["cover_generation_error"] = _single_line(note, 220) or "生图失败"
                     project["cover_generation_next_retry_at"] = now + min(24, max(3, attempt_number * 3)) * 3600
-                    logger.info("[PrivateCompanion] 创作封面未生成: project=%s attempt=%s error=%s", project_id, attempt_number, _single_line(note, 180))
+                    logger.info("创作封面未生成: project=%s attempt=%s error=%s", project_id, attempt_number, _single_line(note, 180))
                 self._save_data_sync(sections={"creative_projects"})
                 return dict(project)
 
+    @story_legacy_operation("creative.project.advance")
     async def _maybe_advance_creative_projects(self) -> None:
-        if not runtime_persona_setting(self, "enable_creative_writing", True):
+        if not runtime_persona_setting(self, "enable_creative_writing", False):
             return
         if self._creative_has_pending_proactive_plan():
             return
@@ -1995,7 +2035,7 @@ class CreativeMixin:
                     reason=f"创作生成失败: {_single_line(exc, 140)}",
                 )
                 logger.warning(
-                    "[PrivateCompanion] 创作推进失败,已保留项目并退避: project=%s failures=%s delay=%sm error=%s",
+                    "创作推进失败,已保留项目并退避: project=%s failures=%s delay=%sm error=%s",
                     _single_line(project.get("id"), 32),
                     _safe_int(project.get("advance_failure_count"), 1, 1),
                     delay_minutes,
@@ -2010,7 +2050,7 @@ class CreativeMixin:
                     reason="生成结果为空、重复或未通过质量复核",
                 )
                 logger.info(
-                    "[PrivateCompanion] 创作片段未通过质量门,本轮不写入资料柜: project=%s failures=%s delay=%sm",
+                    "创作片段未通过质量门,本轮不写入资料柜: project=%s failures=%s delay=%sm",
                     _single_line(project.get("id"), 32),
                     _safe_int(project.get("advance_failure_count"), 1, 1),
                     delay_minutes,
@@ -2067,6 +2107,7 @@ class CreativeMixin:
         if cover_project_id:
             await self._maybe_generate_creative_cover(cover_project_id)
 
+    @story_legacy_sync_operation("creative.share.select")
     def _latest_creative_share_candidate(self) -> dict[str, Any] | None:
         projects = self._creative_projects()
         for project in reversed(projects):
@@ -2137,6 +2178,7 @@ class CreativeMixin:
             }
         return None
 
+    @story_legacy_sync_operation("creative.share.disclose")
     def _mark_creative_milestone_disclosed(self, candidate: dict[str, Any]) -> None:
         project_id = _single_line(candidate.get("project_id"), 20)
         milestone = _single_line(candidate.get("milestone"), 40)
@@ -2153,10 +2195,23 @@ class CreativeMixin:
                 disclosed.append(milestone)
             break
 
+    @story_legacy_sync_operation("creative.share.schedule")
     def _maybe_schedule_creative_share(self) -> bool:
-        if not bool(runtime_persona_setting(self, "enable_creative_writing", True)):
+        if not bool(runtime_persona_setting(self, "enable_creative_writing", False)):
             return False
         candidate = self._latest_creative_share_candidate()
+        if not isinstance(candidate, dict):
+            return False
+        return self._schedule_creative_share_candidate(candidate)
+
+    def _schedule_creative_share_candidate(
+        self,
+        candidate: dict[str, Any],
+        *,
+        mark_disclosed: bool = True,
+    ) -> bool:
+        """Schedule one validated candidate; the shelf owner marks disclosure."""
+
         if not isinstance(candidate, dict):
             return False
         users = self.data.get("users")
@@ -2230,7 +2285,8 @@ class CreativeMixin:
                 continue
             user["last_creative_share_key"] = key
             user["last_creative_share_at"] = now
-            self._mark_creative_milestone_disclosed(candidate)
+            if mark_disclosed:
+                self._mark_creative_milestone_disclosed(candidate)
             changed = True
         return changed
 

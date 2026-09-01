@@ -4,9 +4,11 @@ from __future__ import annotations
 from copy import deepcopy
 from typing import Any
 
-from astrbot.api import logger
 
 from .sqlite_backend import SqliteStoreNotInitializedError
+from ..logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 
 def _initialize_backend_from_payload(
@@ -18,14 +20,14 @@ def _initialize_backend_from_payload(
     try:
         backend.initialize_empty_store(deepcopy(payload))
         logger.info(
-            "[PrivateCompanion] 已%s到 %s 后端",
+            "已%s到 %s 后端",
             action,
             backend.backend_name(),
         )
         return backend.load_store()
     except Exception as exc:
         logger.warning(
-            "[PrivateCompanion] %s到 %s 后端失败,本次继续使用来源数据: %s",
+            "%s到 %s 后端失败,本次继续使用来源数据: %s",
             action,
             backend.backend_name(),
             exc,
@@ -45,11 +47,11 @@ def migrate_json_to_backend_if_needed(backend: Any, json_backend: Any, default_d
                     payload,
                     action="从 JSON 恢复未完成迁移的数据",
                 )
-            return _initialize_backend_from_payload(
-                backend,
-                default_data,
-                action="初始化空存储",
-            )
+            # An existing SQLite file is installation evidence, even when its
+            # schema is incomplete.  Without a JSON recovery source we cannot
+            # distinguish an interrupted migration from deliberate data loss,
+            # so never replace it with a valid-looking empty store.
+            raise
     if json_backend.exists():
         payload = json_backend.load_store()
         return _initialize_backend_from_payload(

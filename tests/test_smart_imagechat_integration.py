@@ -250,7 +250,7 @@ class _ReactionHarness(SceneContextMixin, LlmToolActionsMixin):
     def _remember_recent_photo_share_snapshot(user, **kwargs) -> None:
         user["last_photo_share_snapshot"] = dict(kwargs)
 
-    def _save_data_sync(self) -> None:
+    def _save_data_sync(self, **_kwargs) -> None:
         self.saved = True
 
     @staticmethod
@@ -265,7 +265,7 @@ class _ReactionHarness(SceneContextMixin, LlmToolActionsMixin):
 
 
 def _reaction_log_payloads(log_info) -> list[dict[str, object]]:
-    prefix = "[PrivateCompanion][ReactionExpression] %s"
+    prefix = "[ReactionExpression] %s"
     payloads: list[dict[str, object]] = []
     for call in log_info.call_args_list:
         if len(call.args) < 2 or call.args[0] != prefix:

@@ -8,12 +8,10 @@ import time
 from pathlib import Path
 from typing import Any
 
-from astrbot.api import logger
 from astrbot.api.star import StarTools
 
 from .body_monitor_integration import BodyMonitorIntegration
 from .bot_personal_contract import capability_descriptor, contract_self_check
-from .bot_personal_outbox import BotPersonalOutbox
 from .config_migration import migrate_flat_config_into_schema_groups
 from .constants import (
     DEFAULT_NATURAL_LANGUAGE_PHOTO_EXTRA_PROMPT,
@@ -37,13 +35,20 @@ from .photo_reference_catalog import load_catalog, validate_and_serialize
 from .proactive_chat_runtime_bridge import ProactiveChatRuntimeBridge
 from .relationship_ledger import normalize_relationship_positive_stage_cap_key
 from .relationship_affinity_runtime import normalize_group_allowlist
-from .relationship_policy import normalize_relationship_stage_policy
+from .relationship_policy import (
+    normalize_relationship_stage_policy,
+    normalize_relationship_stage_provider_routes,
+)
 from .runtime_compat import probe_runtime_capabilities
 from .migration_coordinator import MigrationCoordinator
 from .migration_outbox import MigrationOutbox
 from .model_routing import DEFAULT_SENSITIVE_REPLACEMENT_KEYWORDS, build_rules, normalize_scope
 from .segmented_message import normalize_component_order, normalize_component_strategy
+from .story_authority import story_startup_sync_operation
 from .unified_person_registry import UnifiedPersonRegistry
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 DEFAULT_AI_DAILY_MORNING_UID = "3706929260006322"
 DEFAULT_AI_DAILY_JUYA_UID = "285286947"
@@ -153,14 +158,14 @@ def _initialize_primary_persona_config(self: Any, config: Any) -> bool:
 
     if self._multi_persona_primary_id_mismatch:
         logger.warning(
-            "[PrivateCompanion] 检测到旧主人格配置不一致，继续以 plugin_specific_persona_id 为权威: "
+            "检测到旧主人格配置不一致，继续以 plugin_specific_persona_id 为权威: "
             "authoritative=%s legacy_candidate=%s",
             authoritative,
             legacy_candidate,
         )
     elif self._multi_persona_primary_requires_configuration and legacy_candidate:
         logger.warning(
-            "[PrivateCompanion] 多人格模式缺少 plugin_specific_persona_id；旧 multi_persona_primary_id "
+            "多人格模式缺少 plugin_specific_persona_id；旧 multi_persona_primary_id "
             "仅保留为待确认候选，不会静默启用: legacy_candidate=%s",
             legacy_candidate,
         )
@@ -185,7 +190,7 @@ def _validate_primary_persona_runtime(self: Any) -> bool:
     if invalid:
         self.enable_multi_persona_mode = False
         logger.warning(
-            "[PrivateCompanion] 多人格主人格已不在 AstrBot 人格列表中，运行态保持关闭等待修复: persona=%s",
+            "多人格主人格已不在 AstrBot 人格列表中，运行态保持关闭等待修复: persona=%s",
             primary,
         )
     return invalid
@@ -230,6 +235,9 @@ def initialize_plugin_entrypoint_state(
     extension_api_factory: Any,
 ) -> None:
     self.extension_api = extension_api_factory(self)
+    self._persistence_owner_token = str(
+        getattr(self.extension_api, "_story_migration_generation", "") or f"instance-{id(self)}"
+    )
     self._external_proactive_abilities: dict[str, dict[str, Any]] = {}
     self._external_realtime_activities: dict[str, dict[str, Any]] = {}
     # Short-lived continuity from realtime extensions. This is deliberately
@@ -253,7 +261,7 @@ def initialize_plugin_entrypoint_state(
         }
     )
     if contract_issues:
-        logger.warning("[PrivateCompanion] Bot Personal contract self-check degraded: %s", ";".join(contract_issues))
+        logger.warning("Bot Personal contract self-check degraded: %s", ";".join(contract_issues))
 
 
 def initialize_plugin_config(self: Any, config: Any) -> None:
@@ -321,7 +329,7 @@ def _initialize_core_and_relationship_config(self: Any, c: Any) -> None:
     config_migration_elapsed_ms = int((time.perf_counter() - config_migration_started) * 1000)
     if config_migration_elapsed_ms > 1200:
         logger.warning(
-            "[PrivateCompanion] 启动配置迁移耗时较高: elapsed=%sms changes=%s",
+            "启动配置迁移耗时较高: elapsed=%sms changes=%s",
             config_migration_elapsed_ms,
             self._startup_config_migration_changes,
         )
@@ -520,6 +528,14 @@ def _initialize_core_and_relationship_config(self: Any, c: Any) -> None:
     self.relationship_stage_policy = normalize_relationship_stage_policy(
         self._cfg_raw(c, "relationship_stage_policy", [])
     )
+    self.enable_relationship_stage_provider_routing = self._cfg_bool(
+        c,
+        "enable_relationship_stage_provider_routing",
+        False,
+    )
+    self.relationship_stage_provider_routes = normalize_relationship_stage_provider_routes(
+        self._cfg_raw(c, "relationship_stage_provider_routes", {})
+    )
     self.relationship_positive_stage_cap_key = normalize_relationship_positive_stage_cap_key(
         self._cfg_raw(c, "relationship_positive_stage_cap_key", "close")
     )
@@ -600,6 +616,7 @@ def _initialize_world_and_model_config(self: Any, c: Any) -> None:
     self.model_fallback_overrides = self._normalize_model_fallback_overrides(
         self._cfg_raw(c, "model_fallback_overrides", {})
     )
+    self.enable_llm_streaming = self._cfg_bool(c, "enable_llm_streaming", False)
     self.enable_deepseek_peak_replacement = self._cfg_bool(c, "enable_deepseek_peak_replacement", False)
     self.model_replacement_scope = normalize_scope(
         self._cfg_raw(c, "model_replacement_scope", "plugin"),
@@ -619,7 +636,7 @@ def _initialize_world_and_model_config(self: Any, c: Any) -> None:
             self.model_replacement_rules, legacy_warnings = build_rules(legacy_config.get("route_rules", []))
             model_replacement_warnings.extend(f"兼容旧插件：{warning}" for warning in legacy_warnings)
     for warning in model_replacement_warnings:
-        logger.warning("[PrivateCompanion] 模型替换规则：%s", warning)
+        logger.warning("模型替换规则：%s", warning)
     self.enable_sensitive_model_replacement = self._cfg_bool(
         c,
         "enable_sensitive_model_replacement",
@@ -788,7 +805,7 @@ def _initialize_world_and_model_config(self: Any, c: Any) -> None:
     self.greeting_idle_minutes = self._cfg_int(c, "greeting_idle_minutes", 30, 0, 240)
     self.allow_insomnia_night_message = self._cfg_bool(c, "allow_insomnia_night_message", True)
     self.proactive_reply_context_hours = self._cfg_int(c, "proactive_reply_context_hours", 12, 1, 72)
-    self.enable_creative_writing = self._cfg_bool(c, "enable_creative_writing", True)
+    self.enable_creative_writing = self._cfg_bool(c, "enable_creative_writing", False)
     self.enable_creative_work_read_guard = self._cfg_bool(
         c, "enable_creative_work_read_guard", True
     )
@@ -989,6 +1006,12 @@ def _initialize_proactive_and_reaction_config(self: Any, c: Any) -> None:
         "enable_llm_controlled_segmenting",
         False,
     )
+    self.llm_controlled_segmenting_prompt = self._cfg_str(
+        c,
+        "llm_controlled_segmenting_prompt",
+        "",
+        "",
+    )[:4000]
     self.enable_segmented_plugin_rules = self._cfg_bool(
         c,
         "enable_segmented_plugin_rules",
@@ -1330,7 +1353,7 @@ def _initialize_photo_and_expression_config(self: Any, c: Any) -> None:
     self.photo_reference_catalog_user_cleared = raw_reference_catalog_user_cleared
     self._startup_photo_reference_catalog_migration_pending = False
     for warning in loaded_reference_catalog.warnings:
-        logger.warning("[PrivateCompanion] 参考图目录加载警告: %s", warning)
+        logger.warning("参考图目录加载警告: %s", warning)
     if loaded_reference_catalog.needs_persist:
         self.photo_reference_catalog_read_only = True
         try:
@@ -1344,10 +1367,10 @@ def _initialize_photo_and_expression_config(self: Any, c: Any) -> None:
                 self._startup_photo_reference_catalog_migration_pending = True
                 self._startup_config_migration_changes += 1
             else:
-                logger.error("[PrivateCompanion] 参考图目录迁移无法写入配置，启动期间继续使用旧配置的只读内存投影")
+                logger.error("参考图目录迁移无法写入配置，启动期间继续使用旧配置的只读内存投影")
         except Exception as exc:
             logger.error(
-                "[PrivateCompanion] 参考图目录迁移失败，启动期间继续使用旧配置的只读内存投影: %s",
+                "参考图目录迁移失败，启动期间继续使用旧配置的只读内存投影: %s",
                 _single_line(exc, 180),
                 exc_info=True,
             )
@@ -1414,7 +1437,9 @@ def _initialize_photo_and_expression_config(self: Any, c: Any) -> None:
     self.weather_alert_token = configured_alert_token or configured_weather_token or legacy_weather_alert_token
     # Expose the old attribute as a runtime alias for integrations written
     # against the early api_key draft; the persisted field remains token.
-    self.weather_alert_api_key = legacy_weather_alert_token or self.weather_alert_token
+    self.weather_alert_api_key = (
+        legacy_weather_alert_token or self.weather_alert_token
+    )
     self.weather_alert_refresh_minutes = self._cfg_int(c, "weather_alert_refresh_minutes", 10, 5, 60)
     self.weather_alert_min_severity = self._normalize_weather_alert_min_severity(
         self._cfg_str(c, "weather_alert_min_severity", "blue", "blue")
@@ -2045,6 +2070,7 @@ def _initialize_group_and_provider_config(self: Any, c: Any) -> None:
     self.allow_poke_action = self.enable_poke_action
     self.allow_voice_action = self.enable_voice_action
 
+@story_startup_sync_operation("startup.store-persona-load")
 def initialize_plugin_runtime(self: Any) -> None:
     # These references are process-local capabilities. Never inherit them from
     # mixin class attributes or a previous hot-reloaded plugin instance.
@@ -2112,6 +2138,21 @@ def initialize_plugin_runtime(self: Any) -> None:
     self._qzone_last_bot = None
     startup_load_started = time.perf_counter()
     self.data = self._load_data_sync()
+    timezone_reconciler = getattr(self, "_invalidate_timezone_derived_state", None)
+    if callable(timezone_reconciler):
+        runtime_state = (
+            self.data.get("proactive_runtime")
+            if isinstance(self.data.get("proactive_runtime"), dict)
+            else {}
+        )
+        timezone_result = timezone_reconciler(
+            str(runtime_state.get("window_timezone") or ""),
+            str(getattr(self, "environment_perception_timezone", "") or ""),
+            schedule_save=False,
+        )
+        timezone_sections = set(timezone_result.get("sections") or [])
+        if timezone_result.get("changed") and timezone_sections:
+            self._save_data_sync(sections=timezone_sections)
     manager = getattr(self, "store_manager", None)
     next_revision = getattr(manager, "next_revision", None)
     if callable(next_revision):
@@ -2128,7 +2169,7 @@ def initialize_plugin_runtime(self: Any) -> None:
             retire_legacy_routing()
         except Exception as exc:
             logger.warning(
-                "[PrivateCompanion] 旧人格路由停用失败，保留原数据等待下次启动重试: %s",
+                "旧人格路由停用失败，保留原数据等待下次启动重试: %s",
                 _single_line(exc, 180),
             )
     migrate_profiles = getattr(self, "_migrate_persona_profiles_sync", None)
@@ -2144,14 +2185,14 @@ def initialize_plugin_runtime(self: Any) -> None:
                 "error": _single_line(exc, 180),
             }
             logger.warning(
-                "[PrivateCompanion] 启动人格配置迁移失败: %s",
+                "启动人格配置迁移失败: %s",
                 _single_line(exc, 180),
             )
     self._body_monitor_integration = BodyMonitorIntegration(self)
     self._apply_tts_runtime_overrides()
     load_elapsed_ms = int((time.perf_counter() - startup_load_started) * 1000)
     if load_elapsed_ms > 1200:
-        logger.warning("[PrivateCompanion] 启动读取数据耗时较高: elapsed=%sms", load_elapsed_ms)
+        logger.warning("启动读取数据耗时较高: elapsed=%sms", load_elapsed_ms)
     self._proactive_chat_runtime_bridge = ProactiveChatRuntimeBridge(self)
     self.page_api = None
     self.standalone_webui = None
@@ -2164,14 +2205,11 @@ def initialize_plugin_post_runtime_state(self: Any, config: Any) -> None:
     self.enable_p5_b1_recall_gate = self._cfg_bool(config, "enable_p5_b1_recall_gate", False)
     self.enable_p5_b1_bridge_gate = self._cfg_bool(config, "enable_p5_b1_bridge_gate", False)
     self.p5_attestation_registry = P5AttestationRegistry()
-    self._bot_personal_outbox = BotPersonalOutbox(
-        self.data,
-        save=lambda: self._schedule_data_save(sections={"bot_personal_outbox"}, delay=0.5),
-        background_task=lambda operation, label: self._create_lifecycle_background_task(
-            operation,
-            label=label,
-        ),
-    )
+    self._bot_personal_outboxes = {}
+    self._bot_personal_outbox = None
+    outbox_getter = getattr(self, "_memory_companion_outbox", None)
+    if callable(outbox_getter):
+        self._bot_personal_outbox = outbox_getter()
     self.unified_person_registry = UnifiedPersonRegistry(self.data)
     self.req041_migration_coordinator = MigrationCoordinator(self.data_dir)
     self.req041_migration_outbox = MigrationOutbox(

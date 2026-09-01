@@ -11,10 +11,12 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from astrbot.api import logger
 
 from .helpers import _now_ts, _safe_float, _single_line
 from .persona_config import runtime_persona_setting
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 
 class BalanceAwarenessMixin:
@@ -252,7 +254,7 @@ class BalanceAwarenessMixin:
                 value = _single_line(raw_value, 500)
                 if key and value and key.lower() not in blocked:
                     headers[key] = value
-        api_key = self._balance_provider_source_key(source)
+        api_key = (self._balance_provider_source_key(source))
         if api_key and not any(key.lower() == "authorization" for key in headers):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
@@ -614,7 +616,7 @@ class BalanceAwarenessMixin:
                     schedule_save(sections={"balance_awareness"}, delay=0.5)
                 if auto_unsupported:
                     logger.warning(
-                        "[PrivateCompanion] 当前 Provider 不支持余额查询,已延长探测间隔: "
+                        "当前 Provider 不支持余额查询,已延长探测间隔: "
                         "failures=%s retry_hours=%.1f max_retry_hours=168 error=%s",
                         failures,
                         retry / 3600.0,
@@ -622,7 +624,7 @@ class BalanceAwarenessMixin:
                     )
                 else:
                     logger.warning(
-                        "[PrivateCompanion] 余额拉取失败,将在稍后重试: failures=%s error=%s",
+                        "余额拉取失败,将在稍后重试: failures=%s error=%s",
                         failures,
                         safe_error,
                     )
@@ -680,7 +682,7 @@ class BalanceAwarenessMixin:
                 schedule_save(sections=sections, delay=0.5)
             if offered:
                 logger.info(
-                    "[PrivateCompanion] 余额偏低事件已进入主动候选链: tier=%s targets=%s",
+                    "余额偏低事件已进入主动候选链: tier=%s targets=%s",
                     tier,
                     offered,
                 )

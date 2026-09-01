@@ -343,6 +343,29 @@
         "default": "",
         "invisible": true
       },
+      "enable_relationship_stage_provider_routing": {
+        "description": "按亲密度阶段选择对话模型",
+        "type": "bool",
+        "hint": "兼容配置项；仅在目标 Provider 存在时切换，缺失或无效配置会保留当前会话 Provider。",
+        "default": false,
+        "invisible": true
+      },
+      "relationship_stage_provider_routes": {
+        "description": "亲密度阶段对话模型映射",
+        "type": "object",
+        "invisible": true,
+        "items": {
+          "deeply_distant": {"description": "极度疏离", "type": "string", "default": "", "invisible": true},
+          "strongly_distant": {"description": "强烈疏离", "type": "string", "default": "", "invisible": true},
+          "distant": {"description": "疏离", "type": "string", "default": "", "invisible": true},
+          "acquaintance": {"description": "初识", "type": "string", "default": "", "invisible": true},
+          "familiar": {"description": "熟悉", "type": "string", "default": "", "invisible": true},
+          "close": {"description": "亲近", "type": "string", "default": "", "invisible": true},
+          "intimate": {"description": "亲密", "type": "string", "default": "", "invisible": true},
+          "deeply_bonded": {"description": "深度联结", "type": "string", "default": "", "invisible": true},
+          "owner_exclusive": {"description": "专属联结", "type": "string", "default": "", "invisible": true}
+        }
+      },
       "relationship_positive_stage_cap_key": {
         "description": "普通用户正向亲密度阶段上限",
         "type": "string",
@@ -1641,7 +1664,7 @@
   "enable_creative_writing": {
     "description": "Legacy flat config: 启用私下创作行为",
     "type": "bool",
-    "default": true,
+    "default": false,
     "invisible": true
   },
   "enable_creative_work_read_guard": {
@@ -4841,6 +4864,12 @@
           "精准配置"
         ]
       },
+      "enable_llm_streaming": {
+        "description": "插件内部 LLM 调用使用流式",
+        "type": "bool",
+        "default": false,
+        "hint": "开启后，插件内部 LLM 调用（私下创作、日程生成、审校分析、续写等后台任务）改为流式逐块累积，避免大输出经 OpenAI 兼容中转单次下发时丢包或截断。此开关独立于 AstrBot 全局“流式响应”，仅作用于插件自身调用；Provider 不支持流式时自动回退原有非流式路径，极短任务（max_tokens < 512）仍走非流式以节省开销。"
+      },
       "enable_deepseek_peak_replacement": {
         "description": "启用 DeepSeek 高价时段替换",
         "type": "bool",
@@ -6573,7 +6602,7 @@
         "description": "启用私下创作行为",
         "type": "bool",
         "hint": "安装并启用 astrbot_plugin_content_companion 后，此开关作为陪伴主链的创作协同开关；实际项目生成、续写、审校和保存由内容扩展负责。未安装时仅启用本体兼容回退，升级期间可保持旧行为。",
-        "default": true
+        "default": false
       },
       "enable_creative_work_read_guard": {
         "description": "启用创作原文读取保护",
@@ -13511,10 +13540,20 @@
       "enable_llm_controlled_segmenting": {
         "description": "LLM 自主分段",
         "type": "bool",
-        "hint": "开启后，直接回复使用的 LLM 可以通过单独一行 <<PRIVATE_COMPANION_SPLIT>> 控制消息边界；默认输出一条消息，长文、代码、列表和引用尽量不要主动分段。",
+        "hint": "允许直接回复使用的 LLM 在适合时自主安排消息边界。",
         "default": false,
         "condition": {
           "enable_segmented_proactive_reply": true
+        }
+      },
+      "llm_controlled_segmenting_prompt": {
+        "description": "自主分段提示词",
+        "type": "text",
+        "hint": "留空使用默认提示词。可使用 {{split_marker}} 表示消息分隔标记，发送给模型前会自动替换。",
+        "default": "",
+        "condition": {
+          "enable_segmented_proactive_reply": true,
+          "enable_llm_controlled_segmenting": true
         }
       },
       "enable_segmented_plugin_rules": {

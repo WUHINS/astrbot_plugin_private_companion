@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import inspect
+import re
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -44,6 +45,15 @@ class PageApiRouteBindingTests(unittest.TestCase):
         self.assertIn(("/overview", ("GET",)), by_route)
         self.assertIn(("/qzone/post", ("GET",)), by_route)
         self.assertIn(("/qzone/post", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/unlock", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/session", ("GET", "POST")), by_route)
+        self.assertIn(("/bookshelf/image", ("GET",)), by_route)
+        self.assertIn(("/bookshelf/image_data", ("GET",)), by_route)
+        self.assertIn(("/bookshelf/delete", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/rate", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/tags", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/comments/update", ("POST",)), by_route)
+        self.assertIn(("/bookshelf/reading_state", ("POST",)), by_route)
 
         overview_handler = inspect.unwrap(by_route[("/overview", ("GET",))][0])
         qzone_get_handler = inspect.unwrap(by_route[("/qzone/post", ("GET",))][0])
@@ -74,6 +84,33 @@ class PageApiRouteBindingTests(unittest.TestCase):
         self.assertIn((f"{PAGE_API_PREFIX}/qzone/post", ("GET",)), registered_methods)
         self.assertIn((f"{PAGE_API_PREFIX}/qzone/post", ("POST",)), registered_methods)
 
+    def test_panel_literal_api_calls_match_registered_routes(self) -> None:
+        registered = {
+            (path, method)
+            for path, _handler, methods, _description in self.api.route_bindings()
+            for method in methods
+        }
+        registered_paths = {path for path, _method in registered}
+        call_pattern = re.compile(
+            r"\b(?P<helper>postJson|fetchJson)\(\s*[\"'`](?P<path>/[^\"'`?${]*)"
+        )
+        pages_root = Path(__file__).resolve().parents[1] / "pages"
+
+        for panel_dir in ("companion-panel", "陪伴面板"):
+            script = (pages_root / panel_dir / "app.js").read_text(encoding="utf-8")
+            calls = [
+                (match.group("helper"), match.group("path"))
+                for match in call_pattern.finditer(script)
+            ]
+            missing_paths = sorted({path for _helper, path in calls if path not in registered_paths})
+            missing_posts = sorted(
+                {path for helper, path in calls if helper == "postJson" and (path, "POST") not in registered}
+            )
+            with self.subTest(panel=panel_dir):
+                self.assertEqual([], missing_paths)
+                self.assertEqual([], missing_posts)
+                self.assertNotIn("disabled_archive", script)
+
 
 class PageAssetPrefixTests(unittest.IsolatedAsyncioTestCase):
     async def test_asset_prefix_follows_standalone_and_legacy_request_contexts(self) -> None:
@@ -103,6 +140,17 @@ class PageAssetPrefixTests(unittest.IsolatedAsyncioTestCase):
                 ),
                 f"{PAGE_API_PREFIX}/bookshelf/image?album_id=album%201&page=2",
             )
+
+    async def test_generic_archive_item_detection_and_id_normalization(self) -> None:
+        api = PrivateCompanionPageApi(SimpleNamespace())
+
+        self.assertTrue(api._is_bookshelf_archive_item({"type": "archive_item", "album_id": "42"}))
+        self.assertTrue(api._is_bookshelf_archive_item({"key": "archive_item:42"}))
+        self.assertTrue(api._is_bookshelf_archive_item({"key": "archive-42"}))
+        self.assertFalse(api._is_bookshelf_archive_item({"type": "legacy_archive_item", "album_id": "42"}))
+        self.assertFalse(api._is_bookshelf_archive_item({"type": "jm_album", "album_id": "42"}))
+        self.assertEqual("42", api._bookshelf_album_id({"id": "archive-42"}))
+        self.assertEqual("42", api._bookshelf_album_id({"key": "archive-42"}))
 
 
 if __name__ == "__main__":

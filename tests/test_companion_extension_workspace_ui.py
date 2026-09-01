@@ -41,6 +41,15 @@ def test_image_workspace_is_served_only_through_companion_page_api() -> None:
     assert "async def get_image_extension_status" in source
 
 
+def test_troubleshooting_redraw_releases_current_test_button() -> None:
+    for panel_root in PANEL_ROOTS:
+        script = (panel_root / "app.js").read_text(encoding="utf-8")
+
+        assert 'document.querySelectorAll("[data-troubleshooting-test]")' in script
+        assert "button.dataset.troubleshootingTest === testType" in script
+        assert "setActionBusy(button, false)" in script
+
+
 def test_image_workspace_api_proxies_extension_status() -> None:
     expected = {
         "installed": True,
@@ -57,6 +66,23 @@ def test_image_workspace_api_proxies_extension_status() -> None:
     assert result["success"] is True
     assert result["data"]["state"] == "managed"
     assert result["data"]["generation_count"] == 3
+
+
+def test_image_workspace_api_reports_contract_mismatch_as_unavailable() -> None:
+    extension = type("ImageExtension", (), {"status": lambda self: {"enabled": True, "available": True}})()
+    plugin = type("Plugin", (), {
+        "_image_companion_api": lambda self: extension,
+        "_image_companion_contract": lambda self, **_kwargs: (
+            "incompatible", extension, 0, "descriptor_method_missing"
+        ),
+    })()
+
+    result = asyncio.run(PrivateCompanionPageApi(plugin).get_image_extension_status())
+
+    assert result["data"]["available"] is False
+    assert result["data"]["state"] == "incompatible"
+    assert result["data"]["reason"] == "descriptor_method_missing"
+    assert result["data"]["companion_contract"]["mode"] == "incompatible"
 
 
 def test_reality_workspace_exposes_mobile_gateway_without_owning_implementation() -> None:

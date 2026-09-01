@@ -948,7 +948,7 @@ const pluginIntegrationAvailabilityRules = {
   enable_qzone_generated_image_publish: () => imageCompanionInstalled() && state.overview?.qzone?.platform_supported !== false,
   enable_qzone_comment_inbox: () => state.overview?.qzone?.platform_supported !== false,
   enable_qzone_emotional_vent_publish: () => Boolean(state.overview?.qzone?.available && toBool(state.featureDraft?.enable_emotion_simulation)),
-  enable_creative_writing: () => true,
+  enable_creative_writing: () => false,
   enable_creative_cover_generation: () => true,
   CREATIVE_MODEL_PROVIDER_ID: () => true,
   CREATIVE_PROVIDER_ID: () => true,
@@ -2075,6 +2075,7 @@ const configLabels = {
   private_image_vision_cache_max_items: "图片转述缓存上限",
   enable_segmented_proactive_reply: "分段发送",
   enable_llm_controlled_segmenting: "LLM 自主分段",
+  llm_controlled_segmenting_prompt: "自主分段提示词",
   enable_segmented_plugin_rules: "插件规则分段",
   segmented_proactive_scope: "分段作用范围",
   segmented_proactive_chat_scope: "分段会话范围",
@@ -2903,7 +2904,8 @@ const configDescriptions = {
   enable_private_image_vision_cache: "开启后，同一张图片或表情包会按内容哈希复用上次视觉摘要，避免重复调用识图模型；会保留压缩预览图用于管理，不保留原始大图，也不会缓存最终聊天回复。",
   private_image_vision_cache_max_items: "最多保留多少条图片视觉摘要缓存。达到上限后会清理最久未命中的旧缓存，0 表示不限制。",
   segmented_proactive_threshold: "纯文本短于或等于该字数时才考虑分段；太长的内容保持一整条，避免读起来散。",
-  enable_llm_controlled_segmenting: "允许直接回复使用的 LLM 通过单独一行 <<PRIVATE_COMPANION_SPLIT>> 控制消息边界。默认输出一条消息；长文、说明、教程、代码、列表和引用尽量不要主动分段。",
+  enable_llm_controlled_segmenting: "允许直接回复使用的 LLM 在适合时自主安排消息边界。",
+  llm_controlled_segmenting_prompt: "留空使用默认提示词。可使用 {{split_marker}} 表示消息分隔标记，发送给模型前会自动替换。",
   enable_segmented_plugin_rules: "按标点、换行和分段词执行插件规则分段。默认开启；总开关保持升级前的值，因此旧版行为不会改变。关闭后仍可只使用 LLM 自主分段。",
   segmented_proactive_scope: "插件主动只影响插件主动消息；全部纯文本回复还会处理普通模型回复和插件生成的非命令文本。回复引用固定跟随第一段，语音、图片、@、平台表情与附件按各自位置策略编排。",
   segmented_proactive_chat_scope: "控制分段在哪类会话生效：全部、仅私聊或仅群聊。不匹配的会话会保持整条发送。",
@@ -3364,7 +3366,7 @@ const featureSettingGroups = {
   enable_daily_diary: ["daily_diary_time", "daily_diary_form", "daily_diary_length", "daily_diary_creativity", "daily_diary_custom_direction", "daily_diary_generate_share_seed", "max_diary_entries"],
   enable_rest_reply_simulation: ["rest_reply_mode", "rest_reply_probability", "rest_reply_llm_threshold", "rest_reply_active_windows", "rest_reply_awake_grace_minutes", "enable_rest_backlog_reply", "rest_backlog_max_messages", "REST_WAKEUP_PROVIDER_ID"],
   enable_busy_reply_gate: ["busy_reply_min_delay_seconds", "busy_reply_max_delay_seconds", "busy_reply_proactive_resume_buffer_minutes"],
-  enable_segmented_proactive_reply: ["enable_llm_controlled_segmenting", "enable_segmented_plugin_rules", "enable_segmented_proactive_chat_profiles", "segmented_proactive_private_enabled", "segmented_proactive_private_scope", "segmented_proactive_private_threshold", "segmented_proactive_private_min_segment_chars", "segmented_proactive_private_max_segments", "segmented_proactive_private_send_as_forward", "segmented_proactive_private_interval_method", "segmented_proactive_private_interval_min", "segmented_proactive_private_interval_max", "segmented_proactive_private_log_base", "segmented_proactive_group_enabled", "segmented_proactive_group_scope", "segmented_proactive_group_threshold", "segmented_proactive_group_min_segment_chars", "segmented_proactive_group_max_segments", "segmented_proactive_group_send_as_forward", "segmented_proactive_group_interval_method", "segmented_proactive_group_interval_min", "segmented_proactive_group_interval_max", "segmented_proactive_group_log_base", "segmented_proactive_scope", "segmented_proactive_chat_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_send_as_forward", "segmented_proactive_voice_strategy", "segmented_proactive_image_strategy", "segmented_proactive_at_strategy", "segmented_proactive_face_strategy", "segmented_proactive_component_order", "reaction_expression_delivery_mode", "segmented_proactive_other_strategy", "segmented_proactive_split_mode", "enable_qq_official_segmented_reply", "segmented_proactive_match_width_variants", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "enable_segmented_proactive_content_replacement", "segmented_proactive_content_replacements", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
+  enable_segmented_proactive_reply: ["enable_llm_controlled_segmenting", "llm_controlled_segmenting_prompt", "enable_segmented_plugin_rules", "enable_segmented_proactive_chat_profiles", "segmented_proactive_private_enabled", "segmented_proactive_private_scope", "segmented_proactive_private_threshold", "segmented_proactive_private_min_segment_chars", "segmented_proactive_private_max_segments", "segmented_proactive_private_send_as_forward", "segmented_proactive_private_interval_method", "segmented_proactive_private_interval_min", "segmented_proactive_private_interval_max", "segmented_proactive_private_log_base", "segmented_proactive_group_enabled", "segmented_proactive_group_scope", "segmented_proactive_group_threshold", "segmented_proactive_group_min_segment_chars", "segmented_proactive_group_max_segments", "segmented_proactive_group_send_as_forward", "segmented_proactive_group_interval_method", "segmented_proactive_group_interval_min", "segmented_proactive_group_interval_max", "segmented_proactive_group_log_base", "segmented_proactive_scope", "segmented_proactive_chat_scope", "segmented_proactive_threshold", "segmented_proactive_min_segment_chars", "segmented_proactive_max_segments", "segmented_proactive_send_as_forward", "segmented_proactive_voice_strategy", "segmented_proactive_image_strategy", "segmented_proactive_at_strategy", "segmented_proactive_face_strategy", "segmented_proactive_component_order", "reaction_expression_delivery_mode", "segmented_proactive_other_strategy", "segmented_proactive_split_mode", "enable_qq_official_segmented_reply", "segmented_proactive_match_width_variants", "segmented_proactive_regex", "segmented_proactive_split_words", "enable_segmented_proactive_content_cleanup", "segmented_proactive_content_cleanup_scope", "segmented_proactive_content_cleanup_rule", "segmented_proactive_content_cleanup_words", "enable_segmented_proactive_content_replacement", "segmented_proactive_content_replacements", "segmented_proactive_interval_method", "segmented_proactive_interval_min", "segmented_proactive_interval_max", "segmented_proactive_log_base"],
   inject_passive_states: ["humanized_state_intensity", "enable_passive_state_delta_injection", "enable_passive_state_continuity_anchor"],
   enable_passive_state_delta_injection: ["enable_passive_state_continuity_anchor"],
   enable_health_state: ["humanized_state_intensity"],
@@ -3498,7 +3500,7 @@ const featureSettingSections = {
       keys: ["enable_flirt_content_tier"],
     },
     {
-      note: "不会由关系自动开启；缺少任一条件都会降级。插件二次复核固定使用指定 Provider，主回复链回退仍由 AstrBot 配置决定。",
+      note: "不会由关系自动开启；只在当轮明确请求、私聊、长期亲密及以上且当前互动非回避/受伤时启用，缺少任一条件都会降级，并沿用当前 Provider。",
     },
   ],
   enable_companion_memory: [
@@ -4092,8 +4094,8 @@ const featureSettingSections = {
   enable_segmented_proactive_reply: [
     {
       title: "分段管线",
-      note: "总开关关闭时两种分段都停用；LLM 自主分段使用单独一行控制标记，插件规则分段继续使用下方规则。",
-      keys: ["enable_llm_controlled_segmenting", "enable_segmented_plugin_rules"],
+      note: "总开关关闭时两种分段都停用；LLM 自主分段可使用自定义提示词，插件规则分段继续使用下方规则。",
+      keys: ["enable_llm_controlled_segmenting", "llm_controlled_segmenting_prompt", "enable_segmented_plugin_rules"],
     },
     {
       title: "模块作用范围",
@@ -4519,6 +4521,7 @@ const featureSettingTypes = {
   enable_segmented_proactive_chat_profiles: { type: "checkbox" },
   segmented_proactive_private_enabled: { type: "checkbox" },
   enable_llm_controlled_segmenting: { type: "checkbox" },
+  llm_controlled_segmenting_prompt: { type: "textarea", rows: 3, maxLength: 4000 },
   enable_segmented_plugin_rules: { type: "checkbox" },
   segmented_proactive_private_scope: { type: "select", options: [["proactive_only", "仅插件主动"], ["all_llm", "全部纯文本回复"]] },
   segmented_proactive_private_threshold: { type: "number", min: 20, max: 1024, step: 2 },
@@ -4939,7 +4942,7 @@ function legacyPhotoApiEndpointFromSettings(settings = {}, backup = false) {
     enabled: backup ? toBool(settings.enable_backup_external_image_api) : true,
     platform: settings[`${prefix}external_image_api_platform`] || "auto",
     base_url: backup ? settings.BACKUP_EXTERNAL_IMAGE_API_BASE_URL : settings.EXTERNAL_IMAGE_API_BASE_URL,
-    api_key: backup ? settings.BACKUP_EXTERNAL_IMAGE_API_KEY : settings.EXTERNAL_IMAGE_API_KEY,
+    api_key: backup ? settings["BACKUP_EXTERNAL_IMAGE_API_KEY"] : settings["EXTERNAL_IMAGE_API_KEY"],
     model: backup ? settings.BACKUP_EXTERNAL_IMAGE_API_MODEL : settings.EXTERNAL_IMAGE_API_MODEL,
     size: settings[`${prefix}external_image_api_size`] || "1024x1024",
     timeout_seconds: settings[`${prefix}external_image_api_timeout_seconds`] || 180,
@@ -5036,6 +5039,7 @@ function photoApiEndpointResult(endpoint, index) {
 function photoApiEndpointResultHtml(result, index) {
   if (!result || !(result.ran_at || result.ran_at_text || result.error || result.detail)) return "";
   const ok = Boolean(result.ok);
+  const unsupported = result.test_status === "unsupported" || result.unsupported === true;
   const meta = [
     result.ran_at_text || "",
     result.elapsed_ms ? `${result.elapsed_ms}ms` : "",
@@ -5043,8 +5047,8 @@ function photoApiEndpointResultHtml(result, index) {
     result.file_size ? formatBytes(result.file_size) : "",
   ].filter(Boolean).join(" · ");
   return `
-    <div class="image-api-test-result ${ok ? "ok" : "error"}">
-      <b>${escapeHtml(ok ? "最近测试通过" : "最近测试失败")}</b>
+    <div class="image-api-test-result ${ok ? "ok" : unsupported ? "unsupported" : "error"}">
+      <b>${escapeHtml(ok ? "最近测试通过" : unsupported ? "未执行旧式测试" : "最近测试失败")}</b>
       <span>${escapeHtml(result.error || result.detail || (ok ? "接口已返回有效图片" : "接口未返回有效图片"))}</span>
       ${meta ? `<small>${escapeHtml(meta)}</small>` : ""}
       ${result.suggestion ? `<small class="test-result-suggestion">${escapeHtml(result.suggestion)}</small>` : ""}
@@ -5770,16 +5774,16 @@ function bookshelfImageDataPath(src) {
   if (raw.startsWith("data:")) return raw;
   try {
     const url = new URL(raw, window.location.origin);
-if (url.pathname.endsWith("/disabled_archive_asset")) {
-return `/disabled_archive_asset_data${url.search}`;
+    if (url.pathname.endsWith("/bookshelf/image")) {
+      return `/bookshelf/image_data${url.search}`;
     }
     if (url.pathname.endsWith("/creative/project/cover")) {
       return `/creative/project/cover_data${url.search}`;
     }
-const marker = "/disabled_archive_asset?";
+    const marker = "/bookshelf/image?";
     const markerIndex = raw.indexOf(marker);
     if (markerIndex >= 0) {
-return `/disabled_archive_asset_data?${raw.slice(markerIndex + marker.length)}`;
+      return `/bookshelf/image_data?${raw.slice(markerIndex + marker.length)}`;
     }
     const creativeMarker = "/creative/project/cover?";
     const creativeMarkerIndex = raw.indexOf(creativeMarker);
@@ -5787,9 +5791,9 @@ return `/disabled_archive_asset_data?${raw.slice(markerIndex + marker.length)}`;
       return `/creative/project/cover_data?${raw.slice(creativeMarkerIndex + creativeMarker.length)}`;
     }
   } catch (error) {
-const marker = "/disabled_archive_asset?";
+    const marker = "/bookshelf/image?";
     const markerIndex = raw.indexOf(marker);
-if (markerIndex >= 0) return `/disabled_archive_asset_data?${raw.slice(markerIndex + marker.length)}`;
+    if (markerIndex >= 0) return `/bookshelf/image_data?${raw.slice(markerIndex + marker.length)}`;
     const creativeMarker = "/creative/project/cover?";
     const creativeMarkerIndex = raw.indexOf(creativeMarker);
     if (creativeMarkerIndex >= 0) return `/creative/project/cover_data?${raw.slice(creativeMarkerIndex + creativeMarker.length)}`;
@@ -5808,7 +5812,7 @@ async function hydrateBookshelfImages(root = document) {
     try {
       if (endpoint.startsWith("data:")) {
         img.src = endpoint;
-} else if (endpoint.startsWith("/disabled_archive_asset_data") || endpoint.startsWith("/creative/project/cover_data")) {
+      } else if (endpoint.startsWith("/bookshelf/image_data") || endpoint.startsWith("/creative/project/cover_data")) {
         const result = await fetchJson(endpoint);
         if (result?.data_url) img.src = result.data_url;
       } else {
@@ -7395,6 +7399,31 @@ async function loadAll(options = {}) {
   } catch (error) {
     if (requestSeq !== loadAllRequestSeq) return;
     $("#subtitle").textContent = `加载失败：${error.message}`;
+  }
+}
+
+async function refreshCompanionPluginTerminal(button) {
+  setActionBusy(button, true);
+  try {
+    const [overview, imageStatus, troubleshooting] = await Promise.all([
+      fetchJson("/overview", { dedupe: false }),
+      fetchJson("/extensions/image/status", { dedupe: false }).catch(() => null),
+      fetchJson("/troubleshooting", { dedupe: false }).catch(() => null),
+    ]);
+    applyOverviewData(overview);
+    if (imageStatus && typeof imageStatus === "object") {
+      state.imageExtensionStatus = imageStatus;
+      state.lazyLoaded.imageExtensionStatus = true;
+      state.imageExtensionError = "";
+    }
+    if (troubleshooting) state.troubleshooting = troubleshooting;
+    state.overviewRefreshedAt = Date.now();
+    renderAll();
+    showToast("陪伴系插件状态已重新检查");
+  } catch (error) {
+    showToast(`检查失败：${error.message}`, "error");
+  } finally {
+    setActionBusy(button, false);
   }
 }
 
@@ -11504,6 +11533,7 @@ function renderDashboard() {
   renderNewsInsightPanel();
   renderWebExplorationPanel();
   renderActivityHeatmap();
+  renderCompanionPluginTerminal();
 }
 
 function renderStrategyOverview() {
@@ -11535,6 +11565,130 @@ function dashboardLifeText(value, fallback = "暂无数据") {
   }
   const text = String(value ?? "").trim();
   return text || fallback;
+}
+
+function companionTerminalStatus(status) {
+  const item = status && typeof status === "object" ? status : {};
+  if (item.conflict) return { tone: "warn", label: "存在冲突" };
+  if (!item.installed) return { tone: "muted", label: "未安装" };
+  if (item.enabled === false) return { tone: "warn", label: "已停用" };
+  if (item.available === false) return { tone: "error", label: "检测异常" };
+  if (item.detected && item.loaded === false) return { tone: "warn", label: "已发现 · 未加载" };
+  return { tone: "ready", label: "已连接" };
+}
+
+function companionTerminalReason(status, fallback) {
+  const item = status && typeof status === "object" ? status : {};
+  return dashboardLifeText(item.reason || item.status || fallback, fallback);
+}
+
+function renderCompanionPluginTerminal() {
+  const listRoot = $("#dashboardCompanionTerminalList");
+  const summaryRoot = $("#dashboardCompanionTerminalSummary");
+  const updatedRoot = $("#dashboardCompanionTerminalUpdated");
+  if (!listRoot) return;
+
+  const overview = state.overview || {};
+  const companion = overview.companion_plugins || {};
+  const livingmemory = overview.livingmemory || {};
+  const plugin = overview.plugin || {};
+  const image = {
+    ...(companion.image || {}),
+    ...(state.imageExtensionStatus && typeof state.imageExtensionStatus === "object" ? state.imageExtensionStatus : {}),
+  };
+  const memory = {
+    installed: Boolean(livingmemory.memory_companion_detected || livingmemory.memory_companion_active || livingmemory.available),
+    enabled: livingmemory.enabled !== false,
+    available: Boolean(livingmemory.compatible_available || livingmemory.available),
+    detected: Boolean(livingmemory.memory_companion_detected),
+    loaded: livingmemory.memory_companion_loaded,
+    conflict: Boolean(livingmemory.conflict),
+    reason: livingmemory.conflict_warning || livingmemory.memory_companion_reason || livingmemory.status,
+  };
+  const entries = [
+    {
+      key: "core",
+      name: "主陪伴插件",
+      detail: "页面 API 与核心陪伴能力",
+      status: { installed: true, enabled: plugin.enabled !== false, available: Boolean(overview.plugin) },
+      note: plugin.enabled === false ? "主插件当前未启用" : "总览数据已从主插件读取",
+      tab: "config",
+      action: "打开配置",
+    },
+    {
+      key: "memory",
+      name: livingmemory.memory_companion_display_name || "记忆协同",
+      detail: "长期记忆召回与提示词桥接",
+      status: memory,
+      note: companionTerminalReason(memory, memory.installed ? "记忆扩展已被发现" : "未发现可协同的记忆插件"),
+      tab: "memory",
+      action: "打开观察",
+    },
+    {
+      key: "image",
+      name: "生图扩展",
+      detail: "图片生成与参考图能力",
+      status: image,
+      note: companionTerminalReason(image, image.installed ? "生图扩展已被发现" : "未安装生图扩展"),
+      tab: "image",
+      action: "打开生图",
+    },
+    {
+      key: "content",
+      name: "创作扩展",
+      detail: "长线创作、阅读与资料柜",
+      status: companion.content || {},
+      note: companionTerminalReason(companion.content, "未发现创作扩展"),
+      tab: "creative",
+      action: "打开创作",
+    },
+    {
+      key: "reality",
+      name: "现实触及扩展",
+      detail: "现实设备与环境触达",
+      status: companion.reality || {},
+      note: companionTerminalReason(companion.reality, "未发现现实触及扩展"),
+      tab: "reality",
+      action: "打开现实触及",
+    },
+    {
+      key: "nai",
+      name: "NAI 生图扩展",
+      detail: "NovelAI 图像生成通道",
+      status: companion.nai || {},
+      note: companionTerminalReason(companion.nai, "未发现 NAI 生图扩展"),
+      tab: "image",
+      action: "打开生图",
+    },
+  ];
+  const normalized = entries.map((entry) => ({ ...entry, state: companionTerminalStatus(entry.status) }));
+  const readyCount = normalized.filter((entry) => entry.state.tone === "ready").length;
+  const attentionCount = normalized.filter((entry) => ["warn", "error"].includes(entry.state.tone)).length;
+  const missingCount = normalized.filter((entry) => entry.state.tone === "muted").length;
+  if (summaryRoot) {
+    const attentionMarkup = attentionCount
+      ? `<span class="dashboard-companion-summary-attention">${attentionCount} 项需要留意</span>`
+      : `<span class="dashboard-companion-summary-ok">当前没有异常项</span>`;
+    const missingMarkup = missingCount
+      ? `<span class="dashboard-companion-summary-missing">${missingCount} 项未安装</span>`
+      : "";
+    summaryRoot.innerHTML = `<span class="dashboard-companion-summary-count"><b>${readyCount}</b> / ${normalized.length} 已连接</span>${attentionMarkup}${missingMarkup}`;
+  }
+  if (updatedRoot) updatedRoot.textContent = dashboardRefreshLabel();
+  listRoot.innerHTML = normalized.map((entry) => `
+    <article class="dashboard-companion-plugin is-${escapeHtml(entry.state.tone)}">
+      <div class="dashboard-companion-plugin-main">
+        <div class="dashboard-companion-plugin-title">
+          <span class="dashboard-companion-plugin-dot" aria-hidden="true"></span>
+          <h3>${escapeHtml(entry.name)}</h3>
+          <span class="dashboard-companion-plugin-status is-${escapeHtml(entry.state.tone)}">${escapeHtml(entry.state.label)}</span>
+        </div>
+        <p>${escapeHtml(entry.detail)}</p>
+        <small>${escapeHtml(entry.note)}</small>
+      </div>
+      <button type="button" class="dashboard-companion-plugin-action" data-jump-tab="${escapeHtml(entry.tab)}" ${entry.key === "image" && !entry.status.installed ? "disabled" : ""}>${escapeHtml(entry.action)}</button>
+    </article>
+  `).join("");
 }
 
 function cycleBodyText(daily) {
@@ -11582,9 +11736,10 @@ function renderDashboardLifeDesk(overview = {}) {
   const currentRoot = $("#dashboardCurrentState");
   if (currentRoot) {
     const energy = Math.max(0, Math.min(100, Number(daily.energy || 0)));
+    const currentLifecycleText = scheduleTimelineSegmentLabel(current);
     const activityMeta = [
       current.end ? `${current.time || "--:--"}-${current.end}` : current.time,
-      scheduleLifecycleLabel(current.lifecycle),
+      currentLifecycleText,
       current.mood,
     ].filter(Boolean).join(" · ");
     const states = [
@@ -11597,8 +11752,8 @@ function renderDashboardLifeDesk(overview = {}) {
     ];
     currentRoot.innerHTML = `
       <div class="life-current-activity">
-        <small>${escapeHtml(activityMeta || "当前日程")}</small>
-        <b>${escapeHtml(dashboardLifeText(current.activity, "暂无当前日程"))}</b>
+        <small>${escapeHtml(activityMeta || "当前计划时段")}</small>
+        <b>${escapeHtml(dashboardLifeText(current.activity, "暂无当前计划时段"))}</b>
         <span>${escapeHtml(dashboardLifeText(current.message_seed || daily.note, "暂无状态补充"))}</span>
       </div>
       <div class="life-energy-track" role="meter" aria-label="当前体力" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(energy)}"><i style="width:${energy}%"></i></div>
@@ -11621,8 +11776,8 @@ function renderDashboardLifeDesk(overview = {}) {
       return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59 ? hour * 60 + minute : null;
     };
     const segmentIsCurrent = (segment) => {
-      const lifecycle = String(segment?.lifecycle || "").toLowerCase();
-      return lifecycle === "active"
+      const clockStatus = String(segment?.clock_status || segment?.lifecycle || "").toLowerCase();
+      return clockStatus === "active"
         || Boolean(current.time && String(segment?.window || "").startsWith(String(current.time)));
     };
     const currentSegmentIndex = segments.findIndex(segmentIsCurrent);
@@ -11667,6 +11822,7 @@ function renderDashboardLifeDesk(overview = {}) {
       const segment = entry.segment;
       const lifecycle = String(segment.lifecycle || "planned").toLowerCase();
       const isCurrent = segmentIsCurrent(segment);
+      const segmentLifecycleText = scheduleTimelineSegmentLabel(segment);
       const summary = segment.summary || segment.activity || "这一段尚未细化";
       const windowText = String(segment.window || "未定");
       const windowMatch = windowText.match(/^(\d{1,2}:\d{2})\s*[-~至]\s*(\d{1,2}:\d{2})$/);
@@ -11681,8 +11837,8 @@ function renderDashboardLifeDesk(overview = {}) {
           <div class="life-timeline-content">
             <b>${escapeHtml(summary)}</b>
             <span>${isCurrent
-              ? '<em class="life-current-marker">当前日程</em>'
-              : `<em class="life-schedule-status is-${escapeHtml(lifecycle)}">${escapeHtml(scheduleLifecycleLabel(lifecycle) || "计划中")}</em>`}</span>
+              ? `<em class="life-current-marker">${escapeHtml(segmentLifecycleText || "进行中")}</em>`
+              : `<em class="life-schedule-status is-${escapeHtml(lifecycle)}">${escapeHtml(segmentLifecycleText || "计划中")}</em>`}</span>
           </div>
         </li>
       `;
@@ -13132,12 +13288,13 @@ let activeTestDiagnosticTitle = "";
 
 function testDiagnosticStatus(result = {}) {
   if (result.pending || result.test_status === "pending") return "pending";
+  if (result.test_status === "unsupported" || result.unsupported === true) return "unsupported";
   if (result.ok || result.test_status === "passed") return "passed";
   return "failed";
 }
 
 function testDiagnosticStatusLabel(result = {}) {
-  return { passed: "测试通过", failed: "测试失败", pending: "等待完成" }[testDiagnosticStatus(result)] || "未知状态";
+  return { passed: "测试通过", failed: "测试失败", pending: "等待完成", unsupported: "未执行旧式测试" }[testDiagnosticStatus(result)] || "未知状态";
 }
 
 function testDiagnosticTimeText(value) {
@@ -16187,7 +16344,7 @@ function renderRelationshipStatus(detail) {
   const interaction = normalizedCurrentInteraction(detail?.current_interaction, isOwner);
   const expression = detail?.expression_decision && typeof detail.expression_decision === "object" ? detail.expression_decision : {};
   const contentTier = { normal: "日常", flirt: "含蓄暧昧" }[String(expression.content_tier || "normal")] || "日常";
-  const providerPolicy = expression.content_provider_policy === "configured_local_only" ? "指定 Provider 精确匹配" : "当前 Provider";
+  const providerPolicy = expression.content_provider_policy === "unmanaged" ? "未启用" : "当前 Provider";
   const proactiveTarget = Number(expression.proactive_target || 0);
   const proactiveTargetText = Number.isFinite(proactiveTarget) && proactiveTarget > 0 ? `${proactiveTarget} / 天` : "跟随全局";
   const trend = { up: "近期升温", down: "近期降温", steady: "近期稳定", unknown: "暂无趋势" }[String(intimacy.trend || "unknown")] || "暂无趋势";
@@ -20690,8 +20847,8 @@ function renderLifeHero(daily, life) {
   $("#lifeLocation").textContent = normalizeLocationText(daily.location);
   $("#lifeWeather").textContent = daily.weather || "暂无天气";
   const current = life.current_plan || {};
-  $("#lifeCurrentActivity").textContent = current.activity || "暂无当前日程";
-  $("#lifeCurrentSeed").textContent = [current.end ? `${current.time}-${current.end}` : current.time, scheduleLifecycleLabel(current.lifecycle), current.mood, current.message_seed].filter(Boolean).join(" · ") || "暂无细化";
+  $("#lifeCurrentActivity").textContent = current.activity || "暂无当前计划时段";
+  $("#lifeCurrentSeed").textContent = [current.end ? `${current.time}-${current.end}` : current.time, scheduleTimelineSegmentLabel(current), current.mood, current.message_seed].filter(Boolean).join(" · ") || "暂无细化";
 }
 
 function roleplayEnergyLabel(value) {
@@ -21229,10 +21386,10 @@ async function saveSelectedBookshelfReadingState() {
       page: currentPage,
       total_pages: pages.length,
       bookmark,
-      access_token: state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || "",
+      access_token: (state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || ""),
     });
     setBookshelfUnlocked(result.bookshelf || bookshelfUnlockedForCurrentPersona());
-    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || state.bookshelfAccessToken || "");
     const updated = allBookshelfBooks().find((item) => item.kind === "archive_item" && String(item.album_id || "") === String(book.album_id));
     if (updated) state.selectedBook = updated;
   } catch (error) {
@@ -22894,8 +23051,8 @@ function proactiveDiagnosticDetailsMarkup(rawDetail) {
       <dl>
         ${rows.map((row) => `
           <div>
-            <dt>${escapeHtml(row.label)}</dt>
-            <dd>${escapeHtml(row.value)}</dd>
+            <dt class="proactive-diagnostic-label">${escapeHtml(row.label)}</dt>
+            <dd class="proactive-diagnostic-value">${escapeHtml(row.value)}</dd>
           </div>
         `).join("")}
       </dl>
@@ -23249,7 +23406,7 @@ function renderDailyTimeline() {
     const presence = segment.presence_status || {};
     const statusText = detailSegmentStatusLabel(segment);
     const presenceText = presenceLabel(presence);
-    const lifecycleText = scheduleLifecycleLabel(segment.lifecycle);
+    const lifecycleText = scheduleTimelineSegmentLabel(segment);
     const metaText = [...new Set([lifecycleText, statusText, presenceText].filter(Boolean))].join(" · ");
     const errorText = String(segment.regeneration_error || segment.error || "").trim();
     const quality = segment.quality || {};
@@ -23278,7 +23435,7 @@ function renderDailyTimeline() {
             `).join("") : `<span>暂无状态变量</span>`}
           </div>
           <ul>
-            ${events.length ? events.map((item) => `<li><span>${escapeHtml(scheduleLifecycleLabel(item.lifecycle))}</span>${escapeHtml(item.window ? `${item.window} · ${item.text}` : item.text)}</li>`).join("") : `<li>暂无细化事件</li>`}
+            ${events.length ? events.map((item) => `<li><span>${escapeHtml(scheduleStoryLifecycleLabel(item))}</span>${escapeHtml(item.window ? `${item.window} · ${item.text}` : item.text)}</li>`).join("") : `<li>暂无细化事件</li>`}
           </ul>
         </div>
       </section>
@@ -23297,9 +23454,29 @@ function scheduleLifecycleLabel(value) {
     planned: "计划中",
     active: "进行中",
     completed: "已完成",
+    partially_completed: "部分完成",
     changed: "已变更",
     cancelled: "已取消",
+    deferred: "已顺延",
+    unknown: "未核实",
   }[String(value || "").toLowerCase()] || "";
+}
+
+function scheduleTimelineSegmentLabel(segment) {
+  const evidence = String(segment?.evidence_lifecycle || "").toLowerCase();
+  const clockStatus = String(segment?.clock_status || "").toLowerCase();
+  const legacy = String(segment?.lifecycle || "").toLowerCase();
+  if (!evidence && !clockStatus && !legacy) return "";
+  if (["active", "completed", "partially_completed", "changed", "cancelled", "deferred"].includes(evidence)) {
+    return scheduleLifecycleLabel(evidence);
+  }
+  return scheduleLifecycleLabel(clockStatus || (!evidence ? legacy : "") || evidence || legacy);
+}
+
+function scheduleStoryLifecycleLabel(item) {
+  const lifecycle = String(item?.lifecycle || "").toLowerCase();
+  if (lifecycle !== "planned") return scheduleLifecycleLabel(lifecycle);
+  return scheduleLifecycleLabel(item?.clock_status || lifecycle) || "计划中";
 }
 
 function scheduleBasisLabel(value) {
@@ -26892,6 +27069,7 @@ function updateSegmentedConfigVisibility(root = document) {
     segmented_proactive_min_segment_chars: !independentProfiles,
     segmented_proactive_max_segments: !independentProfiles,
     enable_llm_controlled_segmenting: true,
+    llm_controlled_segmenting_prompt: toBool(values.enable_llm_controlled_segmenting),
     enable_segmented_plugin_rules: true,
     segmented_proactive_send_as_forward: !independentProfiles,
     segmented_proactive_interval_method: !independentProfiles,
@@ -26953,7 +27131,7 @@ function bindSegmentedPreview(root = document) {
       });
     });
   });
-  const controls = scope.querySelectorAll('[name^="segmented_proactive_"], [name="reaction_expression_delivery_mode"], [name="enable_segmented_proactive_reply"], [name="enable_llm_controlled_segmenting"], [name="enable_segmented_plugin_rules"], [name="enable_segmented_proactive_content_cleanup"], [name="enable_segmented_proactive_content_replacement"], [data-feature-param^="segmented_proactive_"], [data-feature-param="reaction_expression_delivery_mode"], [data-feature-param="enable_llm_controlled_segmenting"], [data-feature-param="enable_segmented_plugin_rules"], [data-feature-param="enable_segmented_proactive_content_cleanup"], [data-feature-param="enable_segmented_proactive_content_replacement"], [data-feature-detail-toggle="enable_segmented_proactive_reply"]');
+  const controls = scope.querySelectorAll('[name^="segmented_proactive_"], [name="reaction_expression_delivery_mode"], [name="enable_segmented_proactive_reply"], [name="enable_llm_controlled_segmenting"], [name="llm_controlled_segmenting_prompt"], [name="enable_segmented_plugin_rules"], [name="enable_segmented_proactive_content_cleanup"], [name="enable_segmented_proactive_content_replacement"], [data-feature-param^="segmented_proactive_"], [data-feature-param="reaction_expression_delivery_mode"], [data-feature-param="enable_llm_controlled_segmenting"], [data-feature-param="llm_controlled_segmenting_prompt"], [data-feature-param="enable_segmented_plugin_rules"], [data-feature-param="enable_segmented_proactive_content_cleanup"], [data-feature-param="enable_segmented_proactive_content_replacement"], [data-feature-detail-toggle="enable_segmented_proactive_reply"]');
   controls.forEach((control) => {
     if (control.dataset.segmentedConfigBound) return;
     control.dataset.segmentedConfigBound = "1";
@@ -28757,8 +28935,7 @@ function featureDependencyLines(key) {
     else dependencies.push(["Proactive Chat", "未检测到；安装后无需修改对方插件，本页联动开关会自动生效"]);
   }
   if (key === "enable_relationship_content_tiers") {
-    dependencies.push(["关系条件", "长期亲密度阶段 + 当前互动状态"]);
-    dependencies.push(["", "主要用户专属关系 + 成年确认 + 当轮同意 + 指定 Provider"]);
+    dependencies.push(["内容边界", "当轮明确请求 + 私聊 + 长期亲密及以上 + 当前互动非回避/受伤"]);
   }
   if (key !== "enable_group_companion" && key.startsWith("enable_group_")) dependencies.push(["依赖", "群聊总开关"]);
   if (key === "enable_group_conversation_followup") dependencies.push(["依赖", "群聊场景感知"]);
@@ -28800,8 +28977,8 @@ function featureDependencyLines(key) {
 const featureDetailGuides = {
   enable_relationship_content_tiers: {
     summary: "在统一表达决策里选择日常或非露骨暧昧尺度；它不新增关系状态，也不改变既有权限。",
-    trigger: "目标私聊进入主模型请求前，根据当轮明确意图、长期关系、当前互动状态和 Provider 身份共同判定。",
-    enabled: "普通暧昧仍受亲密阶段和互动状态约束；只对已确认的主要用户专属私聊开放，缺条件自动降级。",
+    trigger: "目标私聊进入主模型请求前，根据当轮明确意图、长期关系和当前互动状态共同判定。",
+    enabled: "含蓄暧昧只在当轮明确请求、长期亲密及以上且当前互动非回避/受伤时开放；缺条件自动降级并沿用当前 Provider。",
     disabled: "所有请求保持日常档；主动消息、群聊、普通用户和记忆插件上下文始终不自动升级表达尺度。",
   },
   enable_custom_relationship_stage_policy: {
@@ -31909,9 +32086,14 @@ function bindPhotoApiEndpointEditor(root = document) {
           },
         };
         renderImageModelConfig();
+        const unsupported = result.test_status === "unsupported" || result.unsupported === true;
         showToast(
-          result.ok ? `${endpoint.name} 测试通过` : `${endpoint.name} 测试失败：${result.error || "未返回有效图片"}`,
-          result.ok ? "success" : "error",
+          result.ok
+            ? `${endpoint.name} 测试通过`
+            : unsupported
+              ? `${endpoint.name}：${result.detail || "新版 Image 请使用完整链路测试"}`
+              : `${endpoint.name} 测试失败：${result.error || "未返回有效图片"}`,
+          result.ok || unsupported ? "ok" : "error",
         );
       } catch (error) {
         state.imageApiEndpointTestResults = {
@@ -39401,6 +39583,9 @@ document.addEventListener("click", async (event) => {
       showToast(`链路测试失败：${error.message}`, "error");
     } finally {
       setActionBusy(troubleshootingTest, false);
+      document.querySelectorAll("[data-troubleshooting-test]").forEach((button) => {
+        if (button.dataset.troubleshootingTest === testType) setActionBusy(button, false);
+      });
     }
     return;
   }
@@ -39730,7 +39915,7 @@ async function deleteSelectedBookshelfItem(button = null) {
       title,
       date: diaryDate,
       entry_key: diaryEntryKey,
-      access_token: state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || "",
+      access_token: (state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || ""),
     });
     if (!result.changed) {
       showToast("没有找到要移除的资料柜条目，请刷新拓展页后再试。", "error");
@@ -39741,7 +39926,7 @@ async function deleteSelectedBookshelfItem(button = null) {
       return;
     }
     setBookshelfUnlocked(result.bookshelf || null);
-    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || state.bookshelfAccessToken || "");
     resetBookshelfSelection();
     renderBookshelf();
     showToast(kind === "diary" ? "日记已删除。" : "已从资料柜移除。");
@@ -39768,10 +39953,10 @@ async function rateSelectedBookshelfItem(button = null) {
       album_id: albumId,
       rating,
       reason,
-      access_token: state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || "",
+      access_token: (state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || ""),
     });
     setBookshelfUnlocked(result.bookshelf || null);
-    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || state.bookshelfAccessToken || "");
     const updated = allBookshelfBooks().find((item) => item.kind === "archive_item" && String(item.album_id || "") === String(albumId));
     if (updated) state.selectedBook = updated;
     renderBookshelf();
@@ -39796,10 +39981,10 @@ async function updateSelectedBookshelfTags(form) {
       album_id: albumId,
       liked_tags: likedTags,
       disliked_tags: dislikedTags,
-      access_token: state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || "",
+      access_token: (state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || ""),
     });
     setBookshelfUnlocked(result.bookshelf || null);
-    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || state.bookshelfAccessToken || "");
     const updated = allBookshelfBooks().find((item) => item.kind === "archive_item" && String(item.album_id || "") === String(albumId));
     if (updated) state.selectedBook = updated;
     state.bookshelfPage = "detail";
@@ -39835,12 +40020,12 @@ async function rereadSelectedBookshelfItem(button = null) {
   }
   const currentPage = state.bookshelfPage;
   await runAction(async () => {
-const result = await postJson("/disabled_archive_comments", {
+    const result = await postJson("/bookshelf/comments/update", {
       album_id: albumId,
-      access_token: state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || "",
+      access_token: (state.bookshelfAccessToken || bookshelfUnlockedForCurrentPersona()?.access_token || ""),
     });
     setBookshelfUnlocked(result.bookshelf || null);
-    state.bookshelfAccessToken = result.bookshelf?.access_token || state.bookshelfAccessToken || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || state.bookshelfAccessToken || "");
     const updated = allBookshelfBooks().find((item) => item.kind === "archive_item" && String(item.album_id || "") === String(albumId));
     if (updated) state.selectedBook = updated;
     state.bookshelfPage = currentPage === "reader" ? "reader" : "detail";
@@ -39986,6 +40171,9 @@ document.addEventListener("change", (event) => {
 });
 
 $("#refreshBtn").addEventListener("click", loadAll);
+$("#dashboardCompanionTerminalRefresh")?.addEventListener("click", (event) => {
+  void refreshCompanionPluginTerminal(event.currentTarget);
+});
 
 document.querySelectorAll("[data-page-font-select]").forEach((select) => {
   select.addEventListener("change", (event) => {
@@ -40082,7 +40270,7 @@ $("#bookshelfUnlockForm").addEventListener("submit", async (event) => {
   try {
     const result = await postJson("/bookshelf/unlock", { password });
     setBookshelfUnlocked(result.bookshelf || null);
-    state.bookshelfAccessToken = result.bookshelf?.access_token || "";
+    state.bookshelfAccessToken = (result.bookshelf?.access_token || "");
     persistBookshelfAccess(result.bookshelf || {});
     if (result.bookshelf?.memo_notes) applyMemoPayload(result.bookshelf.memo_notes);
     resetBookshelfSelection();

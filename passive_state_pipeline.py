@@ -5,7 +5,6 @@ import asyncio
 import re
 from typing import Any
 
-from astrbot.api import logger
 
 from .conversation_injection_plan import (
     PLACEMENT_STABLE_SYSTEM,
@@ -16,12 +15,63 @@ from .group_prompt_context import (
     GROUP_HISTORY_INJECTED_ATTR,
     group_prompt_context_history_count,
 )
-from .helpers import _now_ts, _safe_float, _single_line
+from .helpers import _now_ts, _safe_float, _single_address, _single_line
 from .persona_config import runtime_persona_setting
 from .prompt_surface import PromptSurface
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 
 GROUP_CONTEXT_FINAL_PRIORITY = 10_000
+
+
+def _neutralize_stale_reaction_feedback_compat(req: Any) -> None:
+    """Best-effort cleanup for plugin instances missing the newer hook."""
+    contexts = getattr(req, "contexts", None)
+    if not isinstance(contexts, list) or not contexts:
+        return
+    tag_pattern = re.compile(
+        r"(?:<|&lt;|\\<)\s*/?\s*pc[_-]?reaction[_-]?expression\b[^>]*?(?:>|&gt;|\\>)"
+        r".*?"
+        r"(?:<|&lt;|\\<)\s*/\s*pc[_-]?reaction[_-]?expression\s*(?:>|&gt;|\\>)",
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+
+    def clean(value: Any) -> tuple[Any, bool]:
+        if isinstance(value, str):
+            updated = tag_pattern.sub("", value)
+            updated = re.sub(r"\n{3,}", "\n\n", updated).strip()
+            return updated, updated != value
+        if isinstance(value, dict):
+            updated = dict(value)
+            changed = False
+            for key in ("content", "text", "value"):
+                if key in updated:
+                    updated[key], item_changed = clean(updated[key])
+                    changed = changed or item_changed
+            return updated, changed
+        if isinstance(value, list):
+            items = []
+            changed = False
+            for item in value:
+                cleaned, item_changed = clean(item)
+                items.append(cleaned)
+                changed = changed or item_changed
+            return items, changed
+        return value, False
+
+    sanitized = []
+    changed = False
+    for item in contexts:
+        cleaned, item_changed = clean(item)
+        sanitized.append(cleaned)
+        changed = changed or item_changed
+    if changed:
+        try:
+            req.contexts = sanitized
+        except Exception:
+            pass
 
 
 async def inject_humanized_state(
@@ -56,7 +106,7 @@ async def inject_humanized_state(
             feedback_recorder(event)
         except Exception as exc:
             logger.debug(
-                "[PrivateCompanion] 记录参考图效果反馈失败: %s",
+                "记录参考图效果反馈失败: %s",
                 _single_line(exc, 120),
             )
     if self._stop_group_llm_reply_if_blocked(event, source="llm_request"):
@@ -76,7 +126,18 @@ async def inject_humanized_state(
         except Exception as exc:
             # Historical cleanup must never prevent the provider request itself.
             logger.debug(
-                "[PrivateCompanion] 清理历史反应标签失败: %s",
+                "清理历史反应标签失败: %s",
+                _single_line(exc, 120),
+            )
+    else:
+        # Older hot-loaded plugin objects may not carry the method even though
+        # this pipeline module has been updated. Keep the request alive and
+        # retain the same historical-tag cleanup semantics.
+        try:
+            _neutralize_stale_reaction_feedback_compat(req)
+        except Exception as exc:
+            logger.debug(
+                "兼容清理历史反应标签失败: %s",
                 _single_line(exc, 120),
             )
     self._append_deepseek_tool_protocol_guard(event, req)
@@ -115,8 +176,23 @@ async def inject_humanized_state(
             scoped_getter = getattr(self, "_req041_scoped_private_read_view", None)
             if callable(scoped_getter):
                 private_user = scoped_getter(event, private_user)
-            preferred_address = _single_line(
-                private_user.get("nickname") or runtime_persona_setting(self, "default_nickname", "你"),
+            portrait_preferred_address = ""
+            portrait_address_reader = getattr(
+                self, "_req036_preferred_address_from_portrait", None
+            )
+            if callable(portrait_address_reader):
+                try:
+                    portrait_preferred_address = _single_line(
+                        await portrait_address_reader(private_user), 24
+                    )
+                except Exception as exc:
+                    logger.debug(
+                        "当前对象画像称呼读取失败，保留既有称呼: %s",
+                        _single_line(exc, 120),
+                    )
+            preferred_address = portrait_preferred_address or _single_address(
+                private_user.get("nickname")
+                or runtime_persona_setting(self, "default_nickname", "你"),
                 24,
             )
             if preferred_address:
@@ -127,7 +203,7 @@ async def inject_humanized_state(
             reason = "private_user_missing" if not isinstance(private_user, dict) else "private_user_disabled"
             log_bookshelf_secret_skip(reason, private_user if isinstance(private_user, dict) else None)
             logger.info(
-                "[PrivateCompanion] 非目标/未启用私聊跳过陪伴被动增强: user=%s reason=%s",
+                "非目标/未启用私聊跳过陪伴被动增强: user=%s reason=%s",
                 _single_line(private_user_id, 40) or "unknown",
                 reason,
             )
@@ -142,7 +218,7 @@ async def inject_humanized_state(
         except Exception:
             pass
         logger.info(
-            "[PrivateCompanion] 睡眠/休息回复闸门放行本轮被动回复: session=%s reason=%s",
+            "睡眠/休息回复闸门放行本轮被动回复: session=%s reason=%s",
             _single_line(getattr(event, "unified_msg_origin", ""), 120) or "unknown",
             _single_line(rest_reason, 120),
         )
@@ -620,7 +696,7 @@ async def inject_humanized_state(
     if lightweight_passive and isinstance(bookshelf_signal, dict) and bookshelf_signal.get("likely"):
         lightweight_passive = False
         logger.info(
-            "[PrivateCompanion] 夹层密码请求退出轻量被动链路: user=%s direct=%s context=%s access=%s text=%s",
+            "夹层密码请求退出轻量被动链路: user=%s direct=%s context=%s access=%s text=%s",
             user_id,
             ",".join(bookshelf_signal.get("direct_matches") or []) or "-",
             ",".join(bookshelf_signal.get("context_matches") or []) or "-",
@@ -1031,7 +1107,7 @@ async def inject_humanized_state(
                 include_heading=False,
             )
         except Exception as exc:
-            logger.debug("[PrivateCompanion] 引用链上下文读取失败: %s", _single_line(exc, 120))
+            logger.debug("引用链上下文读取失败: %s", _single_line(exc, 120))
             reply_chain_context = ""
         if reply_chain_context:
             prompt_surface.add(
@@ -1082,9 +1158,9 @@ async def inject_humanized_state(
             if vision_wait_timeout > 0:
                 buffered_image_vision = _single_line(await asyncio.wait_for(asyncio.shield(vision_task), timeout=vision_wait_timeout), buffered_image_vision_limit)
         except asyncio.TimeoutError:
-            logger.info("[PrivateCompanion] 私聊图片视觉转述仍在进行,本轮先注入路径兜底: timeout=%.1fs", vision_wait_timeout)
+            logger.warning("私聊图片视觉转述仍在进行,本轮先注入路径兜底: timeout=%.1fs", vision_wait_timeout)
         except Exception as exc:
-            logger.info("[PrivateCompanion] 私聊图片视觉转述获取失败: %s", _single_line(exc, 120))
+            logger.warning("私聊图片视觉转述获取失败: %s", _single_line(exc, 120))
     buffered_images_include_gif = (
         bool(runtime_persona_setting(self, "enable_private_image_gif_enhancement", True))
         and self._private_image_sources_include_gif(buffered_images)
@@ -1213,7 +1289,7 @@ async def inject_humanized_state(
                         image_refs.append(request_ref)
             if not image_refs:
                 logger.info(
-                    "[PrivateCompanion] 私聊延迟图片无模型可读源,跳过直接挂图: user=%s images=%s",
+                    "私聊延迟图片无模型可读源,跳过直接挂图: user=%s images=%s",
                     user_id,
                     len(buffered_images),
                 )
@@ -1231,7 +1307,7 @@ async def inject_humanized_state(
                         existing.append(image_ref)
                 req.image_urls = existing
                 logger.info(
-                    "[PrivateCompanion] 私聊延迟图片已挂回视觉主模型: user=%s images=%s mounted=%s",
+                    "私聊延迟图片已挂回视觉主模型: user=%s images=%s mounted=%s",
                     user_id,
                     len(buffered_images),
                     len(image_refs),
@@ -1239,7 +1315,7 @@ async def inject_humanized_state(
                 try:
                     await self._refresh_default_persona_prompt(str(getattr(event, "unified_msg_origin", "") or ""))
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] 图片直挂刷新人格缓存失败: %s", exc)
+                    logger.debug("图片直挂刷新人格缓存失败: %s", exc)
                 direct_role_hint = self._private_image_direct_role_appearance_prompt(
                     include_heading=False,
                 )
@@ -1257,7 +1333,7 @@ async def inject_humanized_state(
             ownership_line = self._private_image_ownership_line(buffered_image_vision)
             reply_objective = self._private_image_reply_objective(ownership_line, vision_text=buffered_image_vision, user_text=inbound_text)
             logger.info(
-                "[PrivateCompanion] 私聊延迟图片已注入视觉摘要: user=%s chars=%s intent=%s ownership=%s objective=%s preview=%s",
+                "私聊延迟图片已注入视觉摘要: user=%s chars=%s intent=%s ownership=%s objective=%s preview=%s",
                 user_id,
                 len(buffered_image_vision),
                 intent_line or "无",
@@ -1336,7 +1412,7 @@ async def inject_humanized_state(
     reply_image_prompt_anchor = ""
     skip_reply_image_for_forward_context = bool(getattr(event, "private_companion_forward_context_injected", False))
     if skip_reply_image_for_forward_context:
-        logger.info("[PrivateCompanion] 本轮已注入合并消息上下文,跳过引用图片重复视觉: user=%s", user_id)
+        logger.info("本轮已注入合并消息上下文,跳过引用图片重复视觉: user=%s", user_id)
     if (
         not skip_reply_image_for_forward_context
         and not buffered_images
@@ -1364,7 +1440,7 @@ async def inject_humanized_state(
                 ownership_line = self._private_image_ownership_line(reply_image_vision)
                 reply_objective = self._private_image_reply_objective(ownership_line, vision_text=reply_image_vision, user_text=inbound_text)
                 logger.info(
-                    "[PrivateCompanion] 私聊引用图片已注入视觉摘要: user=%s images=%s intent=%s ownership=%s objective=%s preview=%s",
+                    "私聊引用图片已注入视觉摘要: user=%s images=%s intent=%s ownership=%s objective=%s preview=%s",
                     user_id,
                     len(reply_image_sources),
                     intent_line or "无",
@@ -1413,7 +1489,7 @@ async def inject_humanized_state(
                             }
                             self._save_data_sync(sections={"users"})
                     except Exception as exc:
-                        logger.debug("[PrivateCompanion] 私聊引用图片视觉反馈目标记录失败: %s", exc)
+                        logger.debug("私聊引用图片视觉反馈目标记录失败: %s", exc)
                 try:
                     setattr(event, "private_companion_reply_image_vision_text", _single_line(reply_image_vision, reply_image_limit))
                     setattr(event, "private_companion_reply_image_count", len(reply_image_sources))
@@ -1481,7 +1557,7 @@ async def inject_humanized_state(
         await self._append_conditional_tool_instructions_to_request(event, req)
         return
     if not injection:
-        logger.debug("[PrivateCompanion] 被动状态提示词片段为空,跳过状态 marker 注入")
+        logger.debug("被动状态提示词片段为空,跳过状态 marker 注入")
         log_bookshelf_secret_skip("empty_passive_injection", current_user, inbound_text)
         await self._append_conditional_tool_instructions_to_request(event, req)
         return
@@ -1542,11 +1618,22 @@ async def inject_humanized_state(
         weather = ""
     if weather and weather != "暂无天气信息":
         state_log_parts.append(f"天气={weather}")
-    current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
-    current_schedule = self._sanitize_schedule_context_for_private_user(
-        self._format_plan_item_for_prompt(current_item),
-        current_user,
-    ) or "无当前日程"
+    schedule_material_getter = getattr(self, "_private_passive_schedule_material", None)
+    if callable(schedule_material_getter):
+        verified_schedule, planned_schedule = schedule_material_getter(current_user)
+    else:
+        current_item = self._get_current_plan_item(self.data.get("daily_plan", {}))
+        verified_schedule = (
+            self._sanitize_schedule_context_for_private_user(
+                self._format_plan_item_for_prompt(current_item),
+                current_user,
+            )
+            if isinstance(current_item, dict)
+            else ""
+        )
+        planned_schedule = ""
+    verified_schedule_log = verified_schedule or "（暂无）"
+    planned_schedule_log = planned_schedule or "（暂无）"
     recorder = getattr(self, "_record_prompt_injection_snapshot", None)
     if callable(recorder):
         await recorder(
@@ -1561,7 +1648,12 @@ async def inject_humanized_state(
             modules=prompt_surface.rendered_fragments(),
             metadata={
                 "状态": "｜".join(state_log_parts),
-                "当前日程": current_schedule,
+                # Keep the legacy key for consumers that already read it, but
+                # make its evidence-backed meaning explicit alongside the
+                # clock-only projection.
+                "当前日程": verified_schedule_log,
+                "已核实当前活动": verified_schedule_log,
+                "当前计划时段": planned_schedule_log,
                 "注入位置": injection_placement,
                 "状态注入模式": "增量"
                 if bool(runtime_persona_setting(self, "enable_passive_state_delta_injection", True))
@@ -1573,7 +1665,7 @@ async def inject_humanized_state(
             },
         )
     logger.info(
-        "[PrivateCompanion] 已注入被动状态提示词到 %s: mode=%s state_mode=%s reason=%s placement=%s chars=%s 状态=%s；当前日程=%s",
+        "已注入被动状态提示词到 %s: mode=%s state_mode=%s reason=%s placement=%s chars=%s 状态=%s；当前日程=%s；已核实当前活动=%s；当前计划时段=%s",
         _single_line(getattr(event, "unified_msg_origin", ""), 80) or "unknown_session",
         "light" if lightweight_passive else "full",
         "delta" if bool(runtime_persona_setting(self, "enable_passive_state_delta_injection", True)) else "legacy",
@@ -1581,5 +1673,7 @@ async def inject_humanized_state(
         injection_placement,
         len(injection),
         "｜".join(state_log_parts),
-        current_schedule,
+        verified_schedule_log,
+        verified_schedule_log,
+        planned_schedule_log,
     )

@@ -31,7 +31,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from xml.etree import ElementTree as ET
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 try:
     from astrbot.api.message_components import At, Image, Plain, Record, Reply
@@ -129,6 +129,9 @@ from .planning import (
     normalize_story_plan,
     pick_detail_segment,
 )
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 DEFAULT_AI_DAILY_NEWS_SOURCE = "B站 AI早报|bilibili:285286947"
 
@@ -705,6 +708,7 @@ class ProactiveMixin(UserRestGateMixin):
             "window_start_at": user.get("planned_proactive_window_start_at"),
             "best_until_at": user.get("planned_proactive_best_until_at"),
             "expire_at": user.get("planned_proactive_expire_at"),
+            "window_timezone": user.get("planned_proactive_window_timezone"),
         }
 
     def _store_planned_proactive_route_fields(self, user: dict[str, Any], item: dict[str, Any]) -> None:
@@ -964,8 +968,94 @@ class ProactiveMixin(UserRestGateMixin):
                 ids.append(user_id)
         return ids
 
+    def _proactive_identity_binding_is_verified(
+        self,
+        user_id: str,
+        user: dict[str, Any] | None,
+    ) -> bool:
+        """Require a concrete platform/account binding before active delivery."""
+        if not isinstance(user, dict):
+            return False
+        normalizer = getattr(self, "_normalize_private_identity_id", None)
+        canonicalizer = getattr(self, "_canonical_private_user_id", None)
+
+        def normalize(value: Any) -> str:
+            result = _single_line(value, 160)
+            if callable(normalizer):
+                try:
+                    result = _single_line(normalizer(result), 160) or result
+                except Exception:
+                    return ""
+            return result
+
+        def canonical(value: Any) -> str:
+            result = normalize(value)
+            if callable(canonicalizer):
+                try:
+                    result = _single_line(canonicalizer(result), 160)
+                except Exception:
+                    return ""
+            return result
+
+        subject = normalize(user.get("identity_subject_id"))
+        platform = _single_line(user.get("identity_platform_kind"), 40).lower()
+        adapter = _single_line(user.get("identity_adapter_instance_id"), 120)
+        bot_id = _single_line(user.get("identity_bot_id"), 120)
+        if not subject or not platform or platform == "generic" or not (adapter or bot_id):
+            return False
+
+        # Plain storage keys must agree with the stamped subject. Scoped
+        # transport keys (platform:subject:digest) keep the subject as source
+        # of truth and are intentionally allowed here.
+        storage_id = normalize(user.get("user_id") or user_id)
+        if storage_id and ":" not in storage_id and canonical(storage_id) != canonical(subject):
+            return False
+        return True
+
+    def _proactive_identity_binding_is_unique(
+        self,
+        user_id: str,
+        user: dict[str, Any],
+    ) -> bool:
+        """Reject duplicate active records for one exact platform identity."""
+        users = self.data.get("users") if isinstance(getattr(self, "data", None), dict) else {}
+        if not isinstance(users, dict):
+            return True
+
+        def binding(candidate: dict[str, Any]) -> tuple[str, str, str, str]:
+            return (
+                _single_line(candidate.get("identity_platform_kind"), 40).lower(),
+                _single_line(candidate.get("identity_subject_id"), 128),
+                _single_line(candidate.get("identity_adapter_instance_id"), 120),
+                _single_line(candidate.get("identity_bot_id"), 120),
+            )
+
+        current_binding = binding(user)
+        if not current_binding[0] or not current_binding[1] or not (current_binding[2] or current_binding[3]):
+            return False
+        current_key = _single_line(user_id, 160)
+        for stored_id, candidate in users.items():
+            if not isinstance(candidate, dict) or candidate is user or _single_line(stored_id, 160) == current_key:
+                continue
+            if not self._proactive_identity_binding_is_verified(str(stored_id), candidate):
+                continue
+            capabilities = candidate.get("unified_profile_capabilities")
+            active = bool(
+                candidate.get("manual_enabled")
+                or candidate.get("auto_enabled")
+                or candidate.get("proactive_private_enabled") is True
+                or (isinstance(capabilities, dict) and capabilities.get("proactive_private_enabled") is True)
+            )
+            if active and binding(candidate) == current_binding:
+                return False
+        return True
+
     def _user_enabled_for_proactive(self, user_id: str, user: dict[str, Any] | None = None) -> bool:
         if not isinstance(user, dict):
+            return False
+        if not self._proactive_identity_binding_is_verified(user_id, user):
+            return False
+        if not self._proactive_identity_binding_is_unique(user_id, user):
             return False
         req036_gate = getattr(self, "_req036_proactive_private_allowed", None)
         if callable(req036_gate):
@@ -1937,7 +2027,7 @@ class ProactiveMixin(UserRestGateMixin):
                     impulse["last_note"] = safe_note
                     impulse["updated_ts"] = check_now
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 清理次要用户未回应主动念头失败: %s", _single_line(exc, 120))
+                logger.debug("清理次要用户未回应主动念头失败: %s", _single_line(exc, 120))
         pool_cleaner = getattr(self, "_cleanup_proactive_candidate_pool", None)
         pending_checker = getattr(self, "_pending_candidate_status", None)
         candidate_user_getter = getattr(self, "_candidate_user_id", None)
@@ -1958,7 +2048,7 @@ class ProactiveMixin(UserRestGateMixin):
                     candidate["note"] = safe_note
                     candidate["updated_ts"] = check_now
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 清理次要用户未回应主动候选失败: %s", _single_line(exc, 120))
+                logger.debug("清理次要用户未回应主动候选失败: %s", _single_line(exc, 120))
 
     @staticmethod
     def _friend_unanswered_should_remove_action(action: str) -> bool:
@@ -3306,6 +3396,177 @@ class ProactiveMixin(UserRestGateMixin):
             impulse["urgency"] = min(_safe_float(impulse.get("urgency"), 0.3), 0.22)
         return self._queue_proactive_impulse(user, impulse)
 
+    def _proactive_window_timezone(self) -> str:
+        return (
+            _single_line(
+                getattr(self, "environment_perception_timezone", ""),
+                64,
+            )
+            or "Asia/Shanghai"
+        )
+
+    def _invalidate_timezone_derived_state(
+        self,
+        previous_timezone: str = "",
+        current_timezone: str = "",
+        *,
+        schedule_save: bool = True,
+    ) -> dict[str, Any]:
+        """Invalidate derived wall-clock state without touching explicit timers."""
+
+        data = getattr(self, "data", None)
+        if not isinstance(data, dict):
+            return {"changed": False, "sections": []}
+        current = _single_line(
+            current_timezone or self._proactive_window_timezone(),
+            64,
+        ) or "Asia/Shanghai"
+        runtime = data.get("proactive_runtime")
+        if not isinstance(runtime, dict):
+            runtime = {}
+            data["proactive_runtime"] = runtime
+        stored = _single_line(runtime.get("window_timezone"), 64)
+        previous = _single_line(previous_timezone, 64) or stored
+        if not previous:
+            runtime["window_timezone"] = current
+            sections = {"proactive_runtime"}
+            if schedule_save:
+                saver = getattr(self, "_schedule_data_save", None)
+                if callable(saver):
+                    saver(sections=sections, delay=0.1)
+            return {
+                "changed": True,
+                "initialized": True,
+                "sections": sorted(sections),
+                "cleared_plans": 0,
+                "blocked_candidates": 0,
+            }
+        if previous == current:
+            runtime["window_timezone"] = current
+            return {"changed": False, "sections": []}
+
+        now = _now_ts()
+        exempt_sources = {"timer", "troubleshooting", "simulation"}
+        blocked_candidates = 0
+        pool = data.get("proactive_candidate_pool")
+        if isinstance(pool, list):
+            for candidate in pool:
+                if not isinstance(candidate, dict):
+                    continue
+                status = _single_line(candidate.get("status"), 24).lower()
+                lifecycle = _single_line(
+                    candidate.get("lifecycle_status"),
+                    24,
+                ).lower()
+                source = self._normalize_legacy_proactive_text(
+                    candidate.get("source"),
+                    limit=40,
+                )
+                if (
+                    source in exempt_sources
+                    or status in {"sent", "blocked", "skipped", "expired", "cancelled", "dropped"}
+                    or lifecycle in {"skipped", "expired"}
+                ):
+                    continue
+                candidate["status"] = "blocked"
+                candidate["lifecycle_status"] = "skipped"
+                candidate["note"] = "运行时区已变化，旧时间窗口已作废"
+                candidate["lifecycle_note"] = "运行时区已变化，旧时间窗口已作废"
+                candidate["updated_ts"] = now
+                candidate["lifecycle_updated_at"] = now
+                blocked_candidates += 1
+
+        cleared_plans = 0
+        users = data.get("users")
+        if isinstance(users, dict):
+            for user in users.values():
+                if not isinstance(user, dict):
+                    continue
+                impulses = user.get("proactive_impulses")
+                if isinstance(impulses, list):
+                    for impulse in impulses:
+                        if not isinstance(impulse, dict):
+                            continue
+                        source = self._normalize_legacy_proactive_text(
+                            impulse.get("source"),
+                            limit=40,
+                        )
+                        state = _single_line(impulse.get("state"), 24).lower()
+                        if source in exempt_sources or state not in {"", "queued", "deferred"}:
+                            continue
+                        impulse["state"] = "blocked"
+                        impulse["last_status"] = "blocked"
+                        impulse["last_note"] = "运行时区已变化，旧时间窗口已作废"
+                        impulse["updated_ts"] = now
+                planned_source = self._normalize_legacy_proactive_text(
+                    user.get("planned_proactive_source"),
+                    limit=40,
+                )
+                has_plan = bool(
+                    _safe_float(user.get("next_proactive_at"), 0)
+                    or planned_source
+                    or _single_line(user.get("planned_candidate_id"), 40)
+                )
+                if has_plan and planned_source not in exempt_sources:
+                    self._clear_pending_proactive_plan(user)
+                    user.pop("planned_weather_alert_context", None)
+                    user.pop("planned_environment_change_context", None)
+                    cleared_plans += 1
+
+        terminal_history: dict[str, Any] = {}
+        alert_state = data.get("weather_alert_awareness")
+        if isinstance(alert_state, dict) and isinstance(
+            alert_state.get("terminal_event_identities"),
+            dict,
+        ):
+            terminal_history = dict(alert_state["terminal_event_identities"])
+        data["weather_alert_awareness"] = {
+            "initialized": False,
+            "baseline_ids": [],
+            "pending_events": [],
+            "terminal_event_identities": terminal_history,
+            "next_check_at": 0,
+            "config_key": "",
+            "window_timezone": current,
+        }
+        data["environment_change_awareness"] = {
+            "initialized": False,
+            "next_check_at": 0,
+            "window_timezone": current,
+        }
+        data["daily_weather"] = {}
+        data["weather_alerts"] = {}
+        runtime["window_timezone"] = current
+        runtime["timezone_changed_at"] = now
+        runtime["previous_window_timezone"] = previous
+        sections = {
+            "users",
+            "proactive_candidate_pool",
+            "proactive_runtime",
+            "daily_weather",
+            "weather_alerts",
+            "weather_alert_awareness",
+            "environment_change_awareness",
+        }
+        if schedule_save:
+            saver = getattr(self, "_schedule_data_save", None)
+            if callable(saver):
+                saver(sections=sections, delay=0.1)
+        logger.info(
+            "运行时区变化，已作废旧派生窗口: from=%s to=%s plans=%s candidates=%s",
+            previous,
+            current,
+            cleared_plans,
+            blocked_candidates,
+        )
+        return {
+            "changed": True,
+            "initialized": False,
+            "sections": sorted(sections),
+            "cleared_plans": cleared_plans,
+            "blocked_candidates": blocked_candidates,
+        }
+
     def _schedule_next_proactive(
         self,
         user: dict[str, Any],
@@ -3329,7 +3590,7 @@ class ProactiveMixin(UserRestGateMixin):
                 self._block_friend_unanswered_pending_proactive(user, note=silence_reason, now=now)
                 self._clear_pending_proactive_plan(user)
                 logger.info(
-                    "[PrivateCompanion] 次要用户连续未回应,停止安排普通主动: user=%s ignored=%s reason=%s",
+                    "次要用户连续未回应,停止安排普通主动: user=%s ignored=%s reason=%s",
                     _single_line(user_id, 40) or "unknown",
                     _safe_int(user.get("ignored_streak"), 0, 0),
                     _single_line(silence_reason, 120),
@@ -3377,6 +3638,7 @@ class ProactiveMixin(UserRestGateMixin):
                 )
                 user["planned_proactive_impulse_id"] = ""
                 user["planned_proactive_window_start_at"] = timer_scheduled
+                user["planned_proactive_window_timezone"] = self._proactive_window_timezone()
                 active_span, grace_span = self._proactive_impulse_default_window_seconds(
                     user["planned_proactive_reason"],
                     source="timer",
@@ -3504,6 +3766,10 @@ class ProactiveMixin(UserRestGateMixin):
         user["planned_proactive_topic"] = _single_line(event.get("topic"), 60)
         user["planned_proactive_impulse_id"] = ""
         user["planned_proactive_window_start_at"] = _safe_float(event.get("window_start_at"), scheduled)
+        user["planned_proactive_window_timezone"] = _single_line(
+            event.get("window_timezone"),
+            64,
+        ) or self._proactive_window_timezone()
         user["planned_proactive_best_until_at"] = _safe_float(event.get("best_until_at"), scheduled)
         user["planned_proactive_expire_at"] = _safe_float(event.get("expire_at"), scheduled)
         # 该入口会替换当前计划，但不消费原念头；不能让新问候继续引用旧候选 ID。
@@ -3583,6 +3849,7 @@ class ProactiveMixin(UserRestGateMixin):
         user["planned_mobile_location_transition_key"] = ""
         user["planned_mobile_location_event_type"] = ""
         user["planned_proactive_window_start_at"] = 0
+        user["planned_proactive_window_timezone"] = ""
         user["planned_proactive_best_until_at"] = 0
         user["planned_proactive_expire_at"] = 0
         self._reset_planned_proactive_delivery_state(user)
@@ -3742,7 +4009,7 @@ class ProactiveMixin(UserRestGateMixin):
                 try:
                     await snapshot_recorder(snapshot)
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] C3 agenda snapshot archival failed: %s", _single_line(exc, 160))
+                    logger.debug("C3 agenda snapshot archival failed: %s", _single_line(exc, 160))
             if callable(reconciliation_recorder) and isinstance(history, list):
                 snapshot_id = _single_line(snapshot.get("snapshot_id"), 160)
                 for reconciliation in reversed(history):
@@ -3754,14 +4021,14 @@ class ProactiveMixin(UserRestGateMixin):
                     try:
                         await reconciliation_recorder(reconciliation)
                     except Exception as exc:
-                        logger.debug("[PrivateCompanion] C3 agenda reconciliation archival failed: %s", _single_line(exc, 160))
+                        logger.debug("C3 agenda reconciliation archival failed: %s", _single_line(exc, 160))
                     break
         flusher = getattr(self, "_memory_companion_flush_bot_personal_outbox", None)
         if callable(flusher):
             try:
                 await flusher(limit=24)
             except Exception as exc:
-                logger.debug("[PrivateCompanion] C3 Bot Personal outbox delivery failed: %s", _single_line(exc, 160))
+                logger.debug("C3 Bot Personal outbox delivery failed: %s", _single_line(exc, 160))
         if snapshots and callable(getattr(self, "_schedule_data_save", None)):
             self._schedule_data_save(
                 sections={"window_snapshots", "agenda_reconciliation_history"},
@@ -3815,7 +4082,7 @@ class ProactiveMixin(UserRestGateMixin):
                     except Exception as exc:
                         self._record_maintenance_task_failure(label, exc)
                         logger.warning(
-                            "[PrivateCompanion] %s维护步骤失败,已跳过: persona=%s task=%s error=%s",
+                            "%s维护步骤失败,已跳过: persona=%s task=%s error=%s",
                             "主动链即时" if immediate else "主动循环",
                             persona_id or "single",
                             label,
@@ -3839,7 +4106,7 @@ class ProactiveMixin(UserRestGateMixin):
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                logger.error(f"[PrivateCompanion] 主动消息循环异常: {e}", exc_info=True)
+                logger.error(f"主动消息循环异常: {e}", exc_info=True)
 
     def _mobile_location_watch_user_ids(self) -> list[str]:
         users = self.data.get("users") if isinstance(getattr(self, "data", None), dict) else {}
@@ -3934,11 +4201,11 @@ class ProactiveMixin(UserRestGateMixin):
         last_seen = _safe_float(current.get("last_seen_at"), 0.0)
         changed = False
 
-        def finish_previous() -> None:
+        def finish_previous(dwell_end: float) -> None:
             nonlocal changed
             if not previous_token:
                 return
-            dwell_seconds = max(0.0, last_seen - _safe_float(current.get("started_at"), last_seen))
+            dwell_seconds = max(0.0, dwell_end - _safe_float(current.get("started_at"), dwell_end))
             policy_getter = getattr(self, "_proactive_quota_policy", None)
             policy = policy_getter(user) if callable(policy_getter) else {}
             tier = _safe_int(policy.get("tier"), 3, 1, 5) if isinstance(policy, dict) else 3
@@ -3959,14 +4226,20 @@ class ProactiveMixin(UserRestGateMixin):
             store.pop(user_id, None)
 
         if not token:
-            finish_previous()
+            # 客户端只在到达/离开时上传定位，停留期内没有新的观察刷新
+            # last_seen；离开确认本身就是停留的终点，用本次检查时间补全
+            # 整段 dwell，不再依赖中途轮询。
+            finish_previous(check_now)
             return changed
         if previous_token and previous_token != token:
-            finish_previous()
+            # 换区即离开已确认，停留终点是本次检查时间。
+            finish_previous(check_now)
             current = {}
             previous_token = ""
         if previous_token and last_seen > 0 and check_now - last_seen > _ANONYMOUS_AREA_STABLE_GAP_SECONDS:
-            finish_previous()
+            # 观察中断太久，中断期间的停留不可信，保守用最后可见时间结算，
+            # 不虚增 dwell 也不把还在原地的用户误判成“离开后”。
+            finish_previous(last_seen)
             current = {}
             previous_token = ""
         if not previous_token:
@@ -4136,28 +4409,15 @@ class ProactiveMixin(UserRestGateMixin):
                 user_ids={normalized},
             )
         except Exception as exc:
-            logger.debug("[PrivateCompanion] 手机位置事件处理暂时失败: %s", _single_line(exc, 160))
+            logger.debug("手机位置事件处理暂时失败: %s", _single_line(exc, 160))
             return {"handled": False, "reason": "watch_failed"}
         return {"handled": True, "triggered": bool(triggered)}
-
-    async def _mobile_location_watch_loop(self):
-        while not self._stop_event.is_set():
-            try:
-                await self._mobile_location_watch_once()
-            except asyncio.CancelledError:
-                raise
-            except Exception as exc:
-                logger.debug("[PrivateCompanion] 移动位置主动监视暂时失败: %s", _single_line(exc, 160))
-            try:
-                await asyncio.wait_for(self._stop_event.wait(), timeout=15.0)
-            except asyncio.TimeoutError:
-                continue
 
     async def _kick_proactive_loop_once(self) -> None:
         try:
             await self._run_scheduler_cycle(immediate=True)
         except Exception as e:
-            logger.warning(f"[PrivateCompanion] 主动链即时唤醒失败: {e}", exc_info=True)
+            logger.warning(f"主动链即时唤醒失败: {e}", exc_info=True)
 
     def _next_scheduler_timeout(self) -> float:
         active_getter = getattr(self, "_active_persona_scope", None)

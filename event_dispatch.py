@@ -33,7 +33,7 @@ from typing import Any
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 from xml.etree import ElementTree as ET
 
-from astrbot.api import AstrBotConfig, logger
+from astrbot.api import AstrBotConfig
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 try:
     from astrbot.api.message_components import At, Image, Plain, Record, Reply
@@ -108,6 +108,7 @@ from .dreaming import (
 from .helpers import _date_key, _now_ts, _safe_float, _safe_int, _single_line, _strip_internal_message_blocks, _today_key
 from .persona_config import runtime_persona_setting
 from .model_routing import CURRENT_MODEL_REPLACEMENT_SOURCES, build_rules, find_route, scope_allows
+from .relationship_policy import relationship_stage_provider_id
 
 _ON_WAITING_LLM_REQUEST = getattr(filter, "on_waiting_llm_request", None)
 if not callable(_ON_WAITING_LLM_REQUEST):
@@ -127,6 +128,9 @@ from .planning import (
     normalize_story_plan,
     pick_detail_segment,
 )
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 DEFAULT_AI_DAILY_NEWS_SOURCE = "B站 AI早报|bilibili:285286947"
 
@@ -212,7 +216,7 @@ _SEGMENTED_WIDTH_VARIANT_GROUPS: tuple[tuple[str, ...], ...] = (
     ("\\", "＼"),
     ("|", "｜"),
     ("+", "＋"),
-    ("-", "－"),
+    ("-", "－", "—"),
     ("=", "＝"),
     ("*", "＊"),
     ("&", "＆"),
@@ -232,12 +236,17 @@ def _expand_segmented_width_variant_words(words: list[str]) -> list[str]:
     expanded = list(dict.fromkeys(str(word) for word in words if str(word) != ""))
     present = set(expanded)
     for variants in _SEGMENTED_WIDTH_VARIANT_GROUPS:
-        if not present.intersection(variants):
-            continue
-        for variant in variants:
-            if variant not in present:
-                expanded.append(variant)
-                present.add(variant)
+        configured_widths = {
+            len(word)
+            for word in tuple(expanded)
+            if word and word[0] in variants and word == word[0] * len(word)
+        }
+        for width in sorted(configured_widths):
+            for variant in variants:
+                candidate = variant * width
+                if candidate not in present:
+                    expanded.append(candidate)
+                    present.add(candidate)
     return expanded
 
 
@@ -443,7 +452,7 @@ _FINGERPRINT_FILLER_PATTERN = re.compile(
     r"[的了吧吗呢啊呀哦噢哈呵嘿诶嗯嘛喽唷哟哇咯嚯]"
     r"|(?<![A-Za-z])[啊哦噢嗯哈嘿诶](?![A-Za-z])"
     r"|(?<![A-Za-z0-9])[了][的]?(?![A-Za-z0-9])"
-    r"|[。，、！？…：；""''【】《》（）\-\–\—\~\s]+"
+    r"|[。，、！？…：；\"'【】《》（）\-–—~\s]+"
 )
 
 
@@ -823,7 +832,7 @@ class EventDispatchMixin:
             if message_id and not prior_message_id:
                 entry["echo_message_id"] = message_id
             logger.info(
-                "[PrivateCompanion] 已拦截未授权私聊拒绝回流: scope=%s mode=%s duplicate=%s",
+                "已拦截未授权私聊拒绝回流: scope=%s mode=%s duplicate=%s",
                 _single_line(scope, 240),
                 match_mode,
                 bool(matched_at),
@@ -1191,6 +1200,7 @@ class EventDispatchMixin:
 
     @staticmethod
     def _outbound_duplicate_sources_match(candidate: dict[str, str], previous: dict[str, Any]) -> bool:
+        """Trust distinct inbound IDs and use sender matching only as a fallback."""
         sender_id = _single_line(candidate.get("sender_id"), 80)
         self_id = _single_line(candidate.get("self_id"), 80)
         previous_sender = _single_line(previous.get("sender_id"), 80)
@@ -1199,10 +1209,26 @@ class EventDispatchMixin:
         from_self = bool(sender_id and self_id and sender_id == self_id)
         same_sender = bool(sender_id and previous_sender and sender_id == previous_sender)
         same_message = bool(message_id and previous_message_id and message_id == previous_message_id)
-        return from_self or same_sender or same_message
+        if from_self or same_message:
+            return True
+        if message_id and previous_message_id:
+            return False
+        return same_sender
+
+    @staticmethod
+    def _outbound_text_guard_key(candidate: dict[str, str]) -> str:
+        """Keep independent inbound turns without exposing their raw IDs in cache keys."""
+        signature = _single_line(candidate.get("signature"), 80)
+        message_id = _single_line(candidate.get("message_id"), 120)
+        if not signature or not message_id:
+            return signature
+        message_digest = hashlib.sha1(
+            message_id.encode("utf-8", errors="ignore")
+        ).hexdigest()
+        return f"{signature}:message:{message_digest}"
 
     def _reserve_outbound_text_candidate(self, candidate: dict[str, str], *, now: float | None = None) -> str:
-        """Reserve an outbound text and return the duplicate state when blocked."""
+        """Reserve one inbound turn and return the duplicate state when blocked."""
         signature = _single_line(candidate.get("signature"), 80)
         fingerprint = _single_line(candidate.get("fingerprint"), 80)
         if not signature:
@@ -1227,9 +1253,15 @@ class EventDispatchMixin:
             ]:
                 cache.pop(key, None)
 
-        # Check exact signature match first.
-        previous = cache.get(signature)
-        if isinstance(previous, dict) and self._outbound_duplicate_sources_match(candidate, previous):
+        # Check every exact-text entry because independent inbound message IDs
+        # have separate idempotency slots under the same reply signature.
+        for previous in cache.values():
+            if not isinstance(previous, dict):
+                continue
+            if _single_line(previous.get("signature"), 80) != signature:
+                continue
+            if not self._outbound_duplicate_sources_match(candidate, previous):
+                continue
             age = max(0.0, now - _safe_float(previous.get("ts"), 0))
             state = _single_line(previous.get("state"), 20) or "pending"
             message_id = _single_line(candidate.get("message_id"), 120)
@@ -1239,25 +1271,32 @@ class EventDispatchMixin:
                 and previous_message_id
                 and message_id == previous_message_id
             )
-            window = 120.0 if same_inbound_message else (60.0 if state == "sent" else 30.0)
+            window = 120.0 if same_inbound_message else (5.0 if state == "sent" else 2.0)
             if age <= window:
                 return state
         # Fall back to fuzzy fingerprint match for semantically-similar text
-        # that may differ in punctuation, filler words, or minor rewording.
+        # while preserving the same inbound-message ownership rules.
         if fingerprint:
-            for key, value in list(cache.items()):
-                if not isinstance(value, dict):
+            for previous in cache.values():
+                if not isinstance(previous, dict):
                     continue
-                prev_fp = _single_line(value.get("fingerprint"), 80)
-                if prev_fp and prev_fp == fingerprint:
-                    age = max(0.0, now - _safe_float(value.get("ts"), 0))
-                    state = _single_line(value.get("state"), 20) or "pending"
-                    window = 60.0 if state == "sent" else 30.0
-                    if age <= window:
-                        return state
-                    break  # only check the most recent matching entry
-
-        cache[signature] = {
+                if _single_line(previous.get("fingerprint"), 80) != fingerprint:
+                    continue
+                if not self._outbound_duplicate_sources_match(candidate, previous):
+                    continue
+                age = max(0.0, now - _safe_float(previous.get("ts"), 0))
+                state = _single_line(previous.get("state"), 20) or "pending"
+                message_id = _single_line(candidate.get("message_id"), 120)
+                previous_message_id = _single_line(previous.get("message_id"), 120)
+                same_inbound_message = bool(
+                    message_id
+                    and previous_message_id
+                    and message_id == previous_message_id
+                )
+                window = 120.0 if same_inbound_message else (5.0 if state == "sent" else 2.0)
+                if age <= window:
+                    return state
+        cache[self._outbound_text_guard_key(candidate)] = {
             **candidate,
             "ts": now,
             "state": "pending",
@@ -1272,7 +1311,7 @@ class EventDispatchMixin:
         if not isinstance(cache, dict):
             cache = {}
             self._recent_outbound_text_guard = cache
-        cache[signature] = {
+        cache[self._outbound_text_guard_key(candidate)] = {
             **candidate,
             "ts": _now_ts() if now is None else now,
             "state": "sent",
@@ -1852,7 +1891,7 @@ class EventDispatchMixin:
                     if converted:
                         return converted
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] 撤回图片组件转换失败: %s", exc)
+                    logger.debug("撤回图片组件转换失败: %s", exc)
             return source
 
         for comp in self._event_components(event):
@@ -1906,7 +1945,7 @@ class EventDispatchMixin:
                 target.write_bytes(raw)
                 return str(target)
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 撤回图片 data url 暂存失败: %s", exc)
+                logger.debug("撤回图片 data url 暂存失败: %s", exc)
                 return ""
 
         for index, source in enumerate(raw_sources[: max(1, limit)], 1):
@@ -1923,7 +1962,7 @@ class EventDispatchMixin:
                     try:
                         downloaded = await asyncio.wait_for(downloader(text, target_dir, f"{now_ms}_{index}"), timeout=8.0)
                     except Exception as exc:
-                        logger.debug("[PrivateCompanion] 撤回图片远程暂存失败: %s", exc)
+                        logger.debug("撤回图片远程暂存失败: %s", exc)
                         downloaded = ""
                     if downloaded:
                         add_persisted(downloaded, "local")
@@ -1944,7 +1983,7 @@ class EventDispatchMixin:
                     add_persisted(str(target), "local")
                     continue
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] 撤回图片本地暂存失败: %s", exc)
+                    logger.debug("撤回图片本地暂存失败: %s", exc)
             if not re.match(r"^(?:[A-Za-z]:[\\/]|/|\\\\|file://)", text):
                 # OneBot/NapCat may expose only a platform-side image file id.
                 # Keep it as a best-effort sendable Image(file=...) reference.
@@ -2087,7 +2126,7 @@ class EventDispatchMixin:
         try:
             iterator = list(root_resolved.rglob("*"))
         except Exception as exc:
-            logger.debug("[PrivateCompanion] 撤回图片缓存扫描失败: %s", exc)
+            logger.debug("撤回图片缓存扫描失败: %s", exc)
             return False
 
         for path in iterator:
@@ -2103,11 +2142,11 @@ class EventDispatchMixin:
                         removed_count += 1
                         removed_bytes += size
                     except Exception as exc:
-                        logger.debug("[PrivateCompanion] 撤回图片过期缓存删除失败: path=%s error=%s", path, exc)
+                        logger.debug("撤回图片过期缓存删除失败: path=%s error=%s", path, exc)
                     continue
                 files.append((mtime, size, path))
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 撤回图片缓存条目读取失败: path=%s error=%s", path, exc)
+                logger.debug("撤回图片缓存条目读取失败: path=%s error=%s", path, exc)
 
         total_bytes = sum(size for _, size, _ in files)
         if max_bytes and total_bytes > max_bytes:
@@ -2120,7 +2159,7 @@ class EventDispatchMixin:
                     removed_count += 1
                     removed_bytes += size
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] 撤回图片容量缓存删除失败: path=%s error=%s", path, exc)
+                    logger.debug("撤回图片容量缓存删除失败: path=%s error=%s", path, exc)
 
         for directory in sorted((p for p in iterator if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
             try:
@@ -2128,11 +2167,11 @@ class EventDispatchMixin:
             except OSError:
                 pass
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 撤回图片空目录清理失败: path=%s error=%s", directory, exc)
+                logger.debug("撤回图片空目录清理失败: path=%s error=%s", directory, exc)
 
         if removed_count:
             logger.info(
-                "[PrivateCompanion] 已清理撤回图片缓存: files=%s size=%.1fMB ttl=%.0fs max=%.1fMB",
+                "已清理撤回图片缓存: files=%s size=%.1fMB ttl=%.0fs max=%.1fMB",
                 removed_count,
                 removed_bytes / 1024 / 1024,
                 ttl,
@@ -2292,7 +2331,7 @@ class EventDispatchMixin:
                 "cache_miss": True,
             }
             logger.info(
-                "[PrivateCompanion] 撤回消息快照未命中: scope=%s message_id=%s notice=%s",
+                "撤回消息快照未命中: scope=%s message_id=%s notice=%s",
                 _single_line(scope, 160) or "-",
                 message_id,
                 _single_line(notice_type, 40) or "-",
@@ -2418,7 +2457,7 @@ class EventDispatchMixin:
                 raw = await call_action("get_msg", message_id=value)
             except Exception as exc:
                 logger.debug(
-                    "[PrivateCompanion] 触发消息存在性检查失败: message_id=%s error=%s",
+                    "触发消息存在性检查失败: message_id=%s error=%s",
                     message_id,
                     _single_line(exc, 120),
                 )
@@ -2661,7 +2700,7 @@ class EventDispatchMixin:
                 40,
             ) or self._quote_cache_key(event)
             logger.debug(
-                "[PrivateCompanion] 当前平台不支持原生撤回，已跳过: platform=%s message_id=%s",
+                "当前平台不支持原生撤回，已跳过: platform=%s message_id=%s",
                 platform_label,
                 message_id,
             )
@@ -2677,10 +2716,10 @@ class EventDispatchMixin:
         for value in attempts:
             try:
                 await call(event, "delete_msg", message_id=value)
-                logger.info("[PrivateCompanion] 已尝试撤回消息: message_id=%s reason=%s", message_id, _single_line(reason, 80))
+                logger.info("已尝试撤回消息: message_id=%s reason=%s", message_id, _single_line(reason, 80))
                 return True
             except Exception as exc:
-                logger.debug("[PrivateCompanion] 撤回消息失败: message_id=%s error=%s", message_id, _single_line(exc, 120))
+                logger.debug("撤回消息失败: message_id=%s error=%s", message_id, _single_line(exc, 120))
         return False
 
     def _candidate_trigger_message_id(self, candidate: dict[str, Any]) -> str:
@@ -2761,12 +2800,12 @@ class EventDispatchMixin:
         platform_supports = getattr(self, "_platform_supports", None)
         if event is not None and callable(platform_supports) and not platform_supports("reply_quote", event=event):
             logger.debug(
-                "[PrivateCompanion] 当前平台不支持指定消息引用，已降级为普通发送: platform=%s",
+                "当前平台不支持指定消息引用，已降级为普通发送: platform=%s",
                 self._quote_cache_key(event),
             )
             return None
         if Reply is None:
-            logger.debug("[PrivateCompanion] 当前 AstrBot 运行环境缺少 Reply 组件，引用触发消息已降级。")
+            logger.debug("当前 AstrBot 运行环境缺少 Reply 组件，引用触发消息已降级。")
             return None
         message_id = _single_line(message_id, 120)
         if not message_id:
@@ -2809,7 +2848,7 @@ class EventDispatchMixin:
             except Exception:
                 continue
         logger.info(
-            "[PrivateCompanion] 当前平台未能构造 Reply 引用组件，已降级为普通发送: platform=%s message_id=%s",
+            "当前平台未能构造 Reply 引用组件，已降级为普通发送: platform=%s message_id=%s",
             cache_key,
             message_id,
         )
@@ -3140,7 +3179,7 @@ class EventDispatchMixin:
             if last <= 0 or now - last > window:
                 continue
             logger.info(
-                "[PrivateCompanion] 用户消息防抖拦截: kind=%s scope=%s sender=%s msg_id=%s text=%s",
+                "用户消息防抖拦截: kind=%s scope=%s sender=%s msg_id=%s text=%s",
                 kind,
                 scope,
                 sender_id,
@@ -3269,7 +3308,7 @@ class EventDispatchMixin:
                     messages.append({"ts": now, "text": cleaned, "sender_name": _single_line(sender_name, 40)})
                 current["deadline_ts"] = now
                 logger.info(
-                    "[PrivateCompanion] 消息收口固定窗口已到,准备立刻收口: kind=%s scope=%s sender=%s count=%s text=%s",
+                    "消息收口固定窗口已到,准备立刻收口: kind=%s scope=%s sender=%s count=%s text=%s",
                     buffer_kind,
                     scope,
                     sender_id,
@@ -3288,7 +3327,7 @@ class EventDispatchMixin:
                 current["deadline_ts"] = now
                 current["max_wait_reached"] = True
                 logger.info(
-                    "[PrivateCompanion] 消息收口达到最长等待,准备立刻收口: kind=%s scope=%s sender=%s max_wait=%.1fs count=%s text=%s",
+                    "消息收口达到最长等待,准备立刻收口: kind=%s scope=%s sender=%s max_wait=%.1fs count=%s text=%s",
                     buffer_kind,
                     scope,
                     sender_id,
@@ -3321,7 +3360,7 @@ class EventDispatchMixin:
                 current["deadline_ts"] = now
                 current["max_merge_reached"] = True
                 logger.info(
-                    "[PrivateCompanion] 消息收口达到最大合并条数,准备立刻收口: kind=%s scope=%s sender=%s max=%s text=%s",
+                    "消息收口达到最大合并条数,准备立刻收口: kind=%s scope=%s sender=%s max=%s text=%s",
                     buffer_kind,
                     scope,
                     sender_id,
@@ -3329,7 +3368,7 @@ class EventDispatchMixin:
                     _single_line(cleaned, 80),
                 )
             logger.info(
-                "[PrivateCompanion] 消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s appended=%s text=%s",
+                "消息收口合并补话: kind=%s mode=%s scope=%s sender=%s wait=%.1fs count=%s appended=%s text=%s",
                 buffer_kind,
                 debounce_mode,
                 scope,
@@ -3357,7 +3396,7 @@ class EventDispatchMixin:
         if smart_debounce:
             buffers[key]["smart_debounce"] = dict(smart_debounce)
         logger.info(
-            "[PrivateCompanion] 消息收口创建缓冲: kind=%s mode=%s scope=%s sender=%s wait=%.1fs text=%s",
+            "消息收口创建缓冲: kind=%s mode=%s scope=%s sender=%s wait=%.1fs text=%s",
             buffer_kind,
             debounce_mode,
             scope,
@@ -3525,7 +3564,7 @@ class EventDispatchMixin:
         except Exception:
             pass
         logger.info(
-            "[PrivateCompanion] LLM 处理中收到补话，旧回复标记过期并合并等待: key=%s count=%s text=%s",
+            "LLM 处理中收到补话，旧回复标记过期并合并等待: key=%s count=%s text=%s",
             key,
             len(messages),
             _single_line(cleaned, 80),
@@ -3564,7 +3603,7 @@ class EventDispatchMixin:
         raw_rules = legacy.get("route_rules", []) if isinstance(legacy, dict) else []
         parsed, warnings = build_rules(raw_rules)
         for warning in warnings:
-            logger.warning("[PrivateCompanion] 兼容旧关键词换模规则：%s", warning)
+            logger.warning("兼容旧关键词换模规则：%s", warning)
         return parsed
 
     @staticmethod
@@ -3603,6 +3642,20 @@ class EventDispatchMixin:
         except Exception:
             return False
 
+    def _model_replacement_provider_model(self, provider_id: str) -> str:
+        value = str(provider_id or "").strip()
+        getter = getattr(getattr(self, "context", None), "get_provider_by_id", None)
+        if not value or not callable(getter):
+            return ""
+        try:
+            provider = getter(value)
+            model_getter = getattr(provider, "get_model", None)
+            if not callable(model_getter):
+                return ""
+            return str(model_getter() or "").strip()[:160]
+        except Exception:
+            return ""
+
     async def _prepare_model_replacement_sources(self, event: AstrMessageEvent) -> list[tuple[str, str]]:
         sources: list[tuple[str, str]] = []
         message = getattr(event, "message_str", "")
@@ -3626,13 +3679,30 @@ class EventDispatchMixin:
                     if isinstance(caption, str) and caption.strip():
                         sources.append(("companion_image_caption", caption))
                 except Exception as exc:
-                    logger.debug("[PrivateCompanion] 模型替换读取图片转述失败：%s", _single_line(exc, 120))
+                    logger.debug("模型替换读取图片转述失败：%s", _single_line(exc, 120))
         return sources
 
-    @_ON_WAITING_LLM_REQUEST(priority=110000)
     async def route_model_replacement_before_agent(self, event: AstrMessageEvent, *args: Any, **kwargs: Any) -> None:
         """Select the conversation Provider before AstrBot builds its agent."""
         if not bool(getattr(self, "enabled", False)):
+            return
+        stage_key, stage_provider = self._relationship_stage_provider_for_event(event)
+        if stage_provider:
+            self._set_model_replacement_event_extra(
+                event,
+                "selected_provider",
+                stage_provider,
+            )
+            self._set_model_replacement_event_extra(
+                event,
+                "selected_model",
+                self._model_replacement_provider_model(stage_provider) or None,
+            )
+            self._set_model_replacement_event_extra(
+                event,
+                "private_companion_relationship_stage_provider_route",
+                {"stage_key": stage_key, "provider_id": stage_provider},
+            )
             return
         sources = await self._prepare_model_replacement_sources(event)
         try:
@@ -3649,7 +3719,7 @@ class EventDispatchMixin:
             provider_id = str(match.rule.provider_id or "").strip()
             model = str(match.rule.model or "").strip()
             if not self._model_replacement_provider_exists(provider_id):
-                logger.warning("[PrivateCompanion] 模型替换规则目标 Provider 不存在，保留原路由：%s", provider_id)
+                logger.warning("模型替换规则目标 Provider 不存在，保留原路由：%s", provider_id)
                 provider_id = ""
         if not provider_id:
             getter = getattr(self, "_default_chat_provider_id", None)
@@ -3676,7 +3746,6 @@ class EventDispatchMixin:
             },
         )
 
-    @filter.on_llm_response(priority=-100000)
     async def clear_model_replacement_context(self, event: AstrMessageEvent, resp: LLMResponse, *args: Any, **kwargs: Any) -> None:
         token = getattr(event, "private_companion_model_replacement_sources_token", None)
         if token is None:
@@ -3687,25 +3756,138 @@ class EventDispatchMixin:
         except Exception:
             pass
 
-    @filter.on_llm_request(priority=110000)
+    def _relationship_stage_provider_for_event(
+        self, event: AstrMessageEvent
+    ) -> tuple[str, str]:
+        if not bool(
+            getattr(self, "enable_relationship_stage_provider_routing", False)
+        ):
+            return "", ""
+        routes = getattr(self, "relationship_stage_provider_routes", {})
+        try:
+            is_private = self._safe_event_is_private(event)
+            raw_sender_id = self._safe_event_sender_id(event)
+            if is_private:
+                resolver = getattr(self, "_private_user_id_for_event", None)
+                sender_id = (
+                    resolver(event)
+                    if callable(resolver)
+                    else self._canonical_private_user_id(raw_sender_id)
+                )
+                users = (
+                    self.data.get("users", {})
+                    if isinstance(getattr(self, "data", None), dict)
+                    else {}
+                )
+                current_user = (
+                    users.get(sender_id)
+                    if sender_id and isinstance(users, dict)
+                    else None
+                )
+            else:
+                projection_getter = getattr(
+                    self, "_req039_group_observation_projection", None
+                )
+                current_user = (
+                    projection_getter(
+                        event,
+                        sender_id=raw_sender_id,
+                        sender_name=self._sender_display_name(event),
+                    )
+                    if callable(projection_getter)
+                    else None
+                )
+            if not isinstance(current_user, dict):
+                return "", ""
+            current_user = self._lab_fixture_relationship_view(event, current_user)
+            if not isinstance(current_user, dict):
+                return "", ""
+            stage_key, provider_id = relationship_stage_provider_id(
+                routes,
+                current_user.get("relationship_score", 0),
+                runtime_persona_setting(self, "relationship_stage_policy", None),
+                previous_stage_key=current_user.get("relationship_phase_key")
+                or current_user.get("relationship_stage_key"),
+                owner_exclusive=(
+                    str(current_user.get("relationship_mode") or "")
+                    == "owner_exclusive"
+                ),
+            )
+            if not provider_id or not self._model_replacement_provider_exists(
+                provider_id
+            ):
+                return stage_key, ""
+            return stage_key, provider_id
+        except Exception:
+            return "", ""
+
     async def enforce_model_replacement_request(self, event: AstrMessageEvent, req: ProviderRequest, *args: Any, **kwargs: Any) -> None:
         if req is None or not bool(getattr(self, "enabled", False)):
             return
         self._set_model_replacement_event_extra(event, "provider_request", req)
-        selected_provider = str(self._model_replacement_event_extra(event, "selected_provider", "") or "").strip()
-        selected_model = self._model_replacement_event_extra(event, "selected_model", None)
+        stage_route = self._model_replacement_event_extra(
+            event,
+            "private_companion_relationship_stage_provider_route",
+            {},
+        )
+        stage_provider = (
+            str(stage_route.get("provider_id") or "").strip()
+            if isinstance(stage_route, dict)
+            else ""
+        )
+        stage_key = (
+            str(stage_route.get("stage_key") or "").strip()
+            if isinstance(stage_route, dict)
+            else ""
+        )
+        # AstrBot versions without the pre-agent waiting hook still resolve
+        # the same stage route here before the request is dispatched.
+        if not stage_provider:
+            stage_key, stage_provider = self._relationship_stage_provider_for_event(event)
+        if stage_provider:
+            selected_provider = stage_provider
+            selected_model = self._model_replacement_provider_model(stage_provider)
+            self._set_model_replacement_event_extra(
+                event,
+                "selected_provider",
+                selected_provider,
+            )
+            self._set_model_replacement_event_extra(
+                event,
+                "selected_model",
+                selected_model or None,
+            )
+            self._set_model_replacement_event_extra(
+                event,
+                "private_companion_relationship_stage_provider_route",
+                {"stage_key": stage_key, "provider_id": selected_provider},
+            )
+        else:
+            selected_provider = str(
+                self._model_replacement_event_extra(
+                    event, "selected_provider", ""
+                )
+                or ""
+            ).strip()
+            selected_model = self._model_replacement_event_extra(
+                event, "selected_model", None
+            )
         if selected_provider:
             try:
                 setattr(req, "provider_id", selected_provider)
             except Exception:
                 pass
-        if selected_model:
+        if stage_provider:
+            try:
+                req.model = selected_model or None
+            except Exception:
+                pass
+        elif selected_model:
             try:
                 req.model = str(selected_model).strip()
             except Exception:
                 pass
 
-    @_ON_WAITING_LLM_REQUEST(priority=100000)
     async def guard_pending_message_debounce(self, event: AstrMessageEvent, *args: Any, **kwargs: Any) -> None:
         """在会话锁前收口补话，避免旧回复与新消息并发出站。"""
         if bool(getattr(event, "private_companion_debounce_pending_merged", False)):
@@ -3726,7 +3908,6 @@ class EventDispatchMixin:
         if text:
             self._message_debounce_absorb_pending_message(event, text)
 
-    @filter.on_llm_response(priority=100000)
     async def settle_pending_message_debounce(self, event: AstrMessageEvent, resp: LLMResponse, *args: Any, **kwargs: Any) -> None:
         key = self._message_debounce_pending_key(event)
         if not key:
@@ -3751,7 +3932,7 @@ class EventDispatchMixin:
                 pass
             pending["updated_ts"] = _now_ts()
             logger.info(
-                "[PrivateCompanion] 已丢弃消息收口中过期 LLM 回复: key=%s event=%s",
+                "已丢弃消息收口中过期 LLM 回复: key=%s event=%s",
                 key,
                 message_id,
             )
@@ -3859,7 +4040,7 @@ class EventDispatchMixin:
         )
         del examples[:- max(20, _safe_int(_persona_value(self, 'smart_message_debounce_examples_limit', 8), 8, 0) * 4 or 20)]
         logger.info(
-            "[PrivateCompanion] 智能防抖学习样本已记录: kind=%s scope=%s messages=%s note=%s",
+            "智能防抖学习样本已记录: kind=%s scope=%s messages=%s note=%s",
             kind,
             scope,
             len(cleaned),
@@ -4065,7 +4246,7 @@ class EventDispatchMixin:
         except Exception:
             pass
         logger.info(
-            "[PrivateCompanion] 群聊短唤醒进入补话等待: wait=%.1fs trigger=%s text=%s",
+            "群聊短唤醒进入补话等待: wait=%.1fs trigger=%s text=%s",
             wait,
             trigger,
             _single_line(cleaned, 40),
@@ -4160,7 +4341,7 @@ class EventDispatchMixin:
                 private_chat=private_chat,
             )
             logger.info(
-                "[PrivateCompanion] 智能防抖沿用等待缓冲: scope=%s sender=%s wait=%.1fs text=%s",
+                "智能防抖沿用等待缓冲: scope=%s sender=%s wait=%.1fs text=%s",
                 scope,
                 sender_id,
                 wait,
@@ -4201,7 +4382,7 @@ class EventDispatchMixin:
                 reason=suspense_reason,
             )
             logger.info(
-                "[PrivateCompanion] 智能防抖本地判定等待补话: scope=%s sender=%s elapsed=%sms reason=%s wait=%.1fs text=%s",
+                "智能防抖本地判定等待补话: scope=%s sender=%s elapsed=%sms reason=%s wait=%.1fs text=%s",
                 scope,
                 sender_id,
                 elapsed_ms,
@@ -4243,7 +4424,7 @@ class EventDispatchMixin:
                 reason=fast_complete_reason,
             )
             logger.info(
-                "[PrivateCompanion] 智能防抖本地快判放行: scope=%s sender=%s elapsed=%sms reason=%s text=%s",
+                "智能防抖本地快判放行: scope=%s sender=%s elapsed=%sms reason=%s text=%s",
                 scope,
                 sender_id,
                 elapsed_ms,
@@ -4290,13 +4471,21 @@ class EventDispatchMixin:
         model_error = ""
         timeout_seconds = max(0.2, min(5.0, _safe_float(_persona_value(self, 'smart_message_debounce_model_timeout_seconds', 0.8), 0.8, 0.2)))
         provider_selector = getattr(self, "_task_provider", None)
+        configured_debounce_provider = _persona_value(
+            self,
+            "smart_message_debounce_provider_id",
+            "",
+        )
+        configured_default_provider = _persona_value(self, "llm_provider_id", "")
         if callable(provider_selector):
             debounce_provider_id = provider_selector(
-                getattr(self, "smart_message_debounce_provider_id", ""),
-                getattr(self, "llm_provider_id", ""),
+                configured_debounce_provider,
+                configured_default_provider,
             )
         else:
-            debounce_provider_id = str(getattr(self, "smart_message_debounce_provider_id", "") or getattr(self, "llm_provider_id", "") or "")
+            debounce_provider_id = str(
+                configured_debounce_provider or configured_default_provider or ""
+            )
         timeout_getter = getattr(self, "_model_timeout_seconds_for_call", None)
         timeout_override = (
             timeout_getter(
@@ -4320,8 +4509,8 @@ class EventDispatchMixin:
                 timeout=timeout_seconds,
             ) or ""
         except asyncio.TimeoutError:
-            logger.info(
-                "[PrivateCompanion] 智能防抖模型判断超时,使用启发式: scope=%s sender=%s timeout=%.1fs text=%s",
+            logger.warning(
+                "智能防抖模型判断超时,使用启发式: scope=%s sender=%s timeout=%.1fs text=%s",
                 scope,
                 sender_id,
                 timeout_seconds,
@@ -4329,7 +4518,7 @@ class EventDispatchMixin:
             )
             model_error = f"timeout>{timeout_seconds:.1f}s"
         except Exception as exc:
-            logger.info("[PrivateCompanion] 智能防抖模型判断失败,使用启发式: %s", _single_line(exc, 120))
+            logger.warning("智能防抖模型判断失败,使用启发式: %s", _single_line(exc, 120))
             model_error = _single_line(exc, 120)
         decision, confidence, reason = self._parse_smart_message_debounce_decision(raw)
         source = "model" if raw else "heuristic"
@@ -4369,7 +4558,7 @@ class EventDispatchMixin:
                 reason=reason,
             )
             logger.info(
-                "[PrivateCompanion] 智能防抖判定放行: scope=%s sender=%s elapsed=%sms source=%s confidence=%.2f reason=%s text=%s",
+                "智能防抖判定放行: scope=%s sender=%s elapsed=%sms source=%s confidence=%.2f reason=%s text=%s",
                 scope,
                 sender_id,
                 elapsed_ms,
@@ -4413,7 +4602,7 @@ class EventDispatchMixin:
             reason=reason,
         )
         logger.info(
-            "[PrivateCompanion] 智能防抖判定等待补话: scope=%s sender=%s elapsed=%sms source=%s wait=%.1fs remaining=%.1fs confidence=%.2f reason=%s text=%s",
+            "智能防抖判定等待补话: scope=%s sender=%s elapsed=%sms source=%s wait=%.1fs remaining=%.1fs confidence=%.2f reason=%s text=%s",
             scope,
             sender_id,
             elapsed_ms,
@@ -4536,7 +4725,7 @@ Bot 近期回复：
         try:
             raw = await self._llm_call(prompt, max_tokens=8, provider_id=provider_id, task="group_air_reply_guard")
         except Exception as exc:
-            logger.debug("[PrivateCompanion] 群聊读空气判断失败: %s", _single_line(exc, 120))
+            logger.debug("群聊读空气判断失败: %s", _single_line(exc, 120))
             return {"block": False, "reason": "judge_failed"}
         answer = str(raw or "").strip().upper()
         if answer.startswith("SILENCE") or answer.startswith("NO") or answer.startswith("否") or answer.startswith("沉默"):
@@ -4785,7 +4974,7 @@ Bot 近期回复：
                 self._save_data_sync(sections={"groups"})
         if refreshed:
             logger.info(
-                "[PrivateCompanion] Bot 回复已确认发送，群聊续接窗口从实际回复时间重新计时: group=%s sender=%s window=%.1fs",
+                "Bot 回复已确认发送，群聊续接窗口从实际回复时间重新计时: group=%s sender=%s window=%.1fs",
                 group_id,
                 sender_id,
                 expires_in,
@@ -5078,7 +5267,7 @@ Bot 近期回复：
                 24,
             )
             logger.info(
-                "[PrivateCompanion] 群聊 @ 休息用户提醒: group=%s sender=%s target=%s until=%s",
+                "群聊 @ 休息用户提醒: group=%s sender=%s target=%s until=%s",
                 self._extract_group_id_from_event(event),
                 sender_id,
                 target_id,
@@ -5149,6 +5338,13 @@ Bot 近期回复：
             except TypeError:
                 result = MessageEventResult().chain_result(chain)
         result = self._disable_result_t2i(result)
+        # Decorating hooks are global in AstrBot. Keep an explicit ownership
+        # marker on results built by this plugin so its optional segmentation
+        # stage cannot rewrite another plugin's plain-text result.
+        try:
+            setattr(result, "_private_companion_owned_result", True)
+        except Exception:
+            pass
         return result
 
     def _disable_result_t2i(self, result: Any) -> Any:
@@ -5419,7 +5615,7 @@ Bot 近期回复：
             if candidate:
                 normalized = candidate
             else:
-                logger.warning("[PrivateCompanion] 主动分段内容替换会清空整条文本，已保留原文")
+                logger.warning("主动分段内容替换会清空整条文本，已保留原文")
         threshold = max(20, _safe_int(setting("threshold", 500), 500, 20, 1024))
         min_segment_chars = max(1, _safe_int(setting("min_segment_chars", 8), 8, 1, 40))
         max_segments = max(
@@ -5470,7 +5666,7 @@ Bot 近期回复：
                 try:
                     cleanup_pattern = re.compile(setting("content_cleanup_rule", '[\\n]'))
                 except re.error as e:
-                    logger.warning("[PrivateCompanion] 主动分段内容清理正则无效,跳过清理: %s", e)
+                    logger.warning("主动分段内容清理正则无效,跳过清理: %s", e)
 
         def _protected_cleanup_chunks(value: str) -> list[tuple[str, bool]]:
             bracket_pairs = {
@@ -5607,6 +5803,18 @@ Bot 近期回复：
                                 delimiter += text_chunk[end]
                                 end += 1
                             current.append(delimiter)
+                            if delimiter == "." and end < len(text_chunk) and text_chunk[end].isdigit():
+                                index = end
+                                continue
+                            push_current()
+                            index = end
+                            continue
+                        if matched == ",":
+                            end = index + 1
+                            current.append(delimiter)
+                            if end < len(text_chunk) and text_chunk[end].isdigit():
+                                index = end
+                                continue
                             push_current()
                             index = end
                             continue
@@ -5616,6 +5824,18 @@ Bot 近期回复：
                                 delimiter += matched
                                 end += len(matched)
                             current.append(delimiter)
+                            if matched in {"~", "～"} and next_non_space_char(end).isdigit():
+                                index = end
+                                continue
+                            push_current()
+                            index = end
+                            continue
+                        if matched and all(char in {"-", "－", "—"} for char in matched):
+                            end = index + len(matched)
+                            current.append(delimiter)
+                            if next_non_space_char(end).isdigit():
+                                index = end
+                                continue
                             push_current()
                             index = end
                             continue
@@ -5908,7 +6128,7 @@ Bot 近期回复：
                 re.DOTALL | re.MULTILINE,
             )
         except re.error as e:
-            logger.warning("[PrivateCompanion] 主动分段正则无效,使用默认规则: %s", e)
+            logger.warning("主动分段正则无效,使用默认规则: %s", e)
             raw_segments = re.findall(r".*?[。？！~…\n]+|.+$", protected_normalized, re.DOTALL | re.MULTILINE)
 
         segments = []

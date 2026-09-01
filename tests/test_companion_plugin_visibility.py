@@ -19,7 +19,10 @@ class CompanionPluginVisibilityTests(unittest.TestCase):
         self.assertEqual(summary["boundary_feedback"], {"installed": True, "enabled": True, "available": False})
         self.assertEqual(summary["temp_emotion"], {"installed": True, "enabled": True, "available": False})
         self.assertEqual(summary["content"], {"installed": False, "enabled": False, "available": False, "reason": "content_companion_unavailable"})
-        self.assertEqual(summary["image"], {"installed": False, "enabled": False, "available": False})
+        self.assertEqual(
+            summary["image"],
+            {"installed": False, "enabled": False, "available": False, "reason": ""},
+        )
         self.assertEqual(summary["reality"], {"installed": False, "enabled": False, "available": False})
 
     def test_loaded_plugins_remain_installed_when_disabled(self) -> None:
@@ -34,7 +37,7 @@ class CompanionPluginVisibilityTests(unittest.TestCase):
 
         self.assertEqual(
             summary["image"],
-            {"installed": True, "enabled": False, "available": True},
+            {"installed": True, "enabled": False, "available": True, "reason": ""},
         )
         self.assertEqual(
             summary["reality"],
@@ -77,6 +80,36 @@ class CompanionPluginVisibilityTests(unittest.TestCase):
         self.assertTrue(summary["reality"]["installed"])
         self.assertTrue(summary["reality"]["available"])
         self.assertFalse(summary["reality"]["enabled"])
+
+    def test_image_summary_uses_effective_companion_contract(self) -> None:
+        image_api = SimpleNamespace(status=lambda: {"enabled": True, "available": True})
+        plugin = SimpleNamespace(
+            _image_companion_api=lambda: image_api,
+            _image_companion_contract=lambda **_kwargs: (
+                "incompatible",
+                image_api,
+                0,
+                "descriptor_method_missing",
+            ),
+        )
+
+        image = self._summary(plugin)["image"]
+
+        self.assertTrue(image["installed"])
+        self.assertTrue(image["enabled"])
+        self.assertFalse(image["available"])
+        self.assertEqual(image["reason"], "descriptor_method_missing")
+        self.assertEqual(image["companion_contract"]["mode"], "incompatible")
+
+    def test_nai_summary_uses_capability_status(self) -> None:
+        nai_api = SimpleNamespace(status=lambda: {"enabled": False, "available": False})
+        plugin = SimpleNamespace(_nai_image_api=lambda: nai_api)
+
+        nai = self._summary(plugin)["nai"]
+
+        self.assertTrue(nai["installed"])
+        self.assertFalse(nai["enabled"])
+        self.assertFalse(nai["available"])
 
 
 if __name__ == "__main__":

@@ -8,7 +8,6 @@ import time
 from datetime import datetime
 from typing import Any
 
-from astrbot.api import logger
 
 from .constants import (
     MODEL_PROVIDER_KEYS,
@@ -19,6 +18,9 @@ from .constants import (
 from .helpers import _flat_get, _now_ts, _safe_float, _safe_int, _single_line, _today_key
 from .model_routing import contains_sensitive_refusal, scope_allows
 from .persona_config import runtime_persona_setting
+from .logging_util import get_module_logger
+
+logger = get_module_logger(__name__)
 
 
 def _looks_like_upstream_llm_error_response(text: Any) -> bool:
@@ -877,14 +879,14 @@ class TokenBudgetMixin:
             self._token_budget_skip_logged_key = log_key
             if error in {"daily_token_soft_limit_deferred", "maintenance_token_saver_deferred"}:
                 logger.info(
-                    "[PrivateCompanion] 每日 Token 软限额已暂缓低优先级 LLM 任务: used=%s soft_limit=%s task=%s",
+                    "每日 Token 软限额已暂缓低优先级 LLM 任务: used=%s soft_limit=%s task=%s",
                     self._today_llm_token_total(),
                     self.daily_token_soft_limit,
                     task or "other",
                 )
             else:
                 logger.warning(
-                    "[PrivateCompanion] 今日插件 Token 限额已达到: %s/%s",
+                    "今日插件 Token 限额已达到: %s/%s",
                     self._today_llm_token_total(),
                     self.daily_token_limit,
                 )
@@ -938,10 +940,10 @@ class TokenBudgetMixin:
         # provider 的任务（日程、日记）会静默退化成模板兜底，且无从归因。
         fallback_id = self._chat_provider_id_from_registry(context)
         if fallback_id:
-            logger.info("[PrivateCompanion] 默认对话 Provider 经注册表兜底解析: %s", fallback_id)
+            logger.info("默认对话 Provider 经注册表兜底解析: %s", fallback_id)
             return fallback_id
         logger.warning(
-            "[PrivateCompanion] 无法解析默认对话 Provider：get_using_provider 与注册表兜底都没有结果；"
+            "无法解析默认对话 Provider：get_using_provider 与注册表兜底都没有结果；"
             "未显式配置 provider 的模型任务将退化为模板兜底"
         )
         return ""
@@ -1288,7 +1290,7 @@ class TokenBudgetMixin:
         if limit is None or estimate <= limit:
             return False, limit, estimate
         logger.warning(
-            "[PrivateCompanion] 请求预估 Token 超过模型卡上限，跳过主模型并切换备用模型: task=%s card=%s estimate=%s limit=%s primary=%s fallback=%s",
+            "请求预估 Token 超过模型卡上限，跳过主模型并切换备用模型: task=%s card=%s estimate=%s limit=%s primary=%s fallback=%s",
             _single_line(task, 80) or "unknown",
             provider_key or "unknown",
             estimate,
@@ -1439,7 +1441,11 @@ class TokenBudgetMixin:
         candidates = ([fallback_provider] if token_routed else [selected_provider])
         if not token_routed and fallback_provider:
             candidates.append(fallback_provider)
-        sensitive_replacement = self._sensitive_model_replacement_provider(selected_provider)
+        sensitive_replacement = (
+            ""
+            if strict_provider
+            else self._sensitive_model_replacement_provider(selected_provider)
+        )
         sensitive_replacement_used = False
         for attempt_index, attempt_provider in enumerate(candidates):
             started_at = time.time()
@@ -1474,26 +1480,30 @@ class TokenBudgetMixin:
 
                 completion = str(getattr(response, "completion_text", "") or "").strip()
                 usage_completion = self._llm_tool_response_for_usage(response, completion)
-                sensitive_keyword = self._sensitive_model_replacement_keyword(completion)
+                response_role = _single_line(getattr(response, "role", ""), 20).lower()
+                semantic_provider_error = _looks_like_upstream_llm_error_response(completion)
+                sensitive_keyword = (
+                    ""
+                    if response_role == "err" or semantic_provider_error
+                    else self._sensitive_model_replacement_keyword(completion)
+                )
                 if sensitive_keyword:
                     if sensitive_replacement and not sensitive_replacement_used:
                         sensitive_replacement_used = True
                         candidates.append(sensitive_replacement)
                         logger.info(
-                            "[PrivateCompanion] 插件工具模型命中敏感拒答，切换指定模型重试: provider=%s target=%s keyword=%s",
+                            "插件工具模型命中敏感拒答，切换指定模型重试: provider=%s target=%s keyword=%s",
                             _single_line(attempt_provider, 120),
                             _single_line(sensitive_replacement, 120),
                             _single_line(sensitive_keyword, 80),
                         )
                         continue
                     logger.warning(
-                        "[PrivateCompanion] 插件工具指定模型仍返回敏感拒答，丢弃本次文本: provider=%s keyword=%s",
+                        "插件工具指定模型仍返回敏感拒答，丢弃本次文本: provider=%s keyword=%s",
                         _single_line(attempt_provider, 120),
                         _single_line(sensitive_keyword, 80),
                     )
                     return None
-                response_role = _single_line(getattr(response, "role", ""), 20).lower()
-                semantic_provider_error = _looks_like_upstream_llm_error_response(completion)
                 if response_role == "err" or semantic_provider_error:
                     failure_code = (
                         "provider_error_role"
@@ -1513,7 +1523,7 @@ class TokenBudgetMixin:
                     )
                     if attempt_index + 1 < len(candidates):
                         logger.warning(
-                            "[PrivateCompanion] 工具调用主模型失败，尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s kind=%s",
+                            "工具调用主模型失败，尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s kind=%s",
                             _single_line(task_key, 80) or "unknown",
                             provider_key or "unknown",
                             _single_line(selected_provider, 120),
@@ -1548,7 +1558,7 @@ class TokenBudgetMixin:
                 )
                 if attempt_index > 0 or token_routed:
                     logger.info(
-                        "[PrivateCompanion] 工具调用使用备用模型: task=%s card=%s provider=%s estimated_tokens=%s",
+                        "工具调用使用备用模型: task=%s card=%s provider=%s estimated_tokens=%s",
                         _single_line(task_key, 80) or "unknown",
                         provider_key or "unknown",
                         _single_line(attempt_provider, 120),
@@ -1569,7 +1579,7 @@ class TokenBudgetMixin:
                 )
                 if attempt_index + 1 < len(candidates):
                     logger.warning(
-                        "[PrivateCompanion] 工具调用失败，尝试卡片备用模型: task=%s card=%s error=%s",
+                        "工具调用失败，尝试卡片备用模型: task=%s card=%s error=%s",
                         _single_line(task_key, 80) or "unknown",
                         provider_key or "unknown",
                         _single_line(exc, 160),
@@ -1577,6 +1587,129 @@ class TokenBudgetMixin:
                     continue
                 raise
         return None
+
+    def _llm_streaming_enabled_for_call(
+        self,
+        *,
+        task: str | None = None,
+        max_tokens: int = 0,
+    ) -> bool:
+        """Whether this plugin-internal LLM call should use streaming.
+
+        Streaming accumulates chunked responses instead of waiting for one
+        large payload, which avoids drops/truncation on OpenAI-compatible
+        relays for big outputs (creative writing, long reviews, ...).  The
+        AstrBot global "streaming response" toggle does not affect
+        plugin-internal calls (they always go through ``text_chat``), so this
+        is an independent switch.
+        """
+        if not bool(getattr(self, "enable_llm_streaming", False)):
+            return False
+        # Keep very short calls non-streaming: the extra chunked round-trips
+        # are pure overhead for small outputs.
+        min_threshold = getattr(type(self), "MODEL_TOKEN_LIMIT_MIN", 256) * 2
+        if max_tokens and 0 < max_tokens < min_threshold:
+            return False
+        return True
+
+    async def _llm_generate_streaming(
+        self,
+        *,
+        provider_id: str,
+        prompt: str,
+        system_prompt: str | None = None,
+        max_tokens: int = 0,
+        timeout_seconds: float | None = None,
+        task: str | None = None,
+    ) -> Any:
+        """Call ``provider.text_chat_stream`` and accumulate chunks.
+
+        AstrBot-compliant providers yield per-token chunks (``is_chunk=True``)
+        and finish with one complete response (``is_chunk=False``); when a
+        provider only emits chunks, the accumulated text is used instead.
+        Returns ``None`` when the provider is unavailable or the stream is
+        empty, so the caller's existing empty/fallback handling applies.
+        """
+        provider_manager = getattr(self.context, "provider_manager", None)
+        getter = getattr(provider_manager, "get_provider_by_id", None)
+        if not callable(getter):
+            return None
+        provider = await getter(provider_id)
+        if provider is None:
+            return None
+        streamer = getattr(provider, "text_chat_stream", None)
+        if not callable(streamer):
+            return None
+
+        stream_kwargs: dict[str, Any] = {"prompt": prompt}
+        if system_prompt:
+            stream_kwargs["system_prompt"] = system_prompt
+        if max_tokens and max_tokens > 0:
+            stream_kwargs["max_tokens"] = max_tokens
+
+        chunk_parts: list[str] = []
+        final_resp: Any = None
+        last_chunk: Any = None
+
+        async def _collect() -> Any:
+            nonlocal final_resp, last_chunk
+            async for resp in streamer(**stream_kwargs):
+                if resp is None:
+                    continue
+                final_resp = resp
+                if getattr(resp, "is_chunk", False):
+                    last_chunk = resp
+                    text = getattr(resp, "completion_text", "")
+                    if not isinstance(text, str):
+                        text = str(text or "")
+                    if text:
+                        chunk_parts.append(text)
+            return final_resp
+
+        try:
+            if timeout_seconds is not None:
+                collected = await asyncio.wait_for(_collect(), timeout=timeout_seconds)
+            else:
+                collected = await _collect()
+        except asyncio.TimeoutError:
+            raise
+        except Exception as exc:
+            logger.debug(
+                "流式 Provider 调用不可用，回退非流式: provider=%s error=%s",
+                _single_line(provider_id, 120),
+                _single_line(exc, 160),
+            )
+            return None
+        if collected is None:
+            return None
+        if not getattr(collected, "is_chunk", False):
+            final_text = getattr(collected, "completion_text", "")
+            if not isinstance(final_text, str):
+                final_text = str(final_text or "")
+            if final_text.strip():
+                if getattr(collected, "usage", None) is None and last_chunk is not None:
+                    chunk_usage = getattr(last_chunk, "usage", None)
+                    if chunk_usage is not None:
+                        try:
+                            collected.usage = chunk_usage
+                        except Exception:
+                            pass
+                return collected
+            if not chunk_parts:
+                return None
+            try:
+                collected.completion_text = "".join(chunk_parts)
+            except Exception:
+                return None
+            return collected
+        accumulated = "".join(chunk_parts)
+        if not accumulated:
+            return None
+        try:
+            collected.completion_text = accumulated
+        except Exception:
+            return None
+        return collected
 
     async def _llm_call(
         self,
@@ -1639,7 +1772,11 @@ class TokenBudgetMixin:
         candidates = ([fallback_provider] if token_routed else [selected_provider])
         if not token_routed and fallback_provider:
             candidates.append(fallback_provider)
-        sensitive_replacement = self._sensitive_model_replacement_provider(selected_provider)
+        sensitive_replacement = (
+            ""
+            if strict_provider
+            else self._sensitive_model_replacement_provider(selected_provider)
+        )
         sensitive_replacement_used = False
         for attempt_index, attempt_provider in enumerate(candidates):
             start = time.time()
@@ -1659,38 +1796,61 @@ class TokenBudgetMixin:
                     timeout_seconds=timeout_seconds,
                 )
                 try:
-                    request_call = self.context.llm_generate(**kwargs)
-                    if effective_timeout is not None:
-                        resp = await asyncio.wait_for(request_call, timeout=effective_timeout)
+                    if self._llm_streaming_enabled_for_call(task=task_key, max_tokens=max_tokens):
+                        resp = await self._llm_generate_streaming(
+                            provider_id=attempt_provider,
+                            prompt=prompt,
+                            system_prompt=system_prompt,
+                            max_tokens=max_tokens,
+                            timeout_seconds=effective_timeout,
+                            task=task_key,
+                        )
+                        if resp is None:
+                            # 流式路径不可用（Provider 不支持流式、流式为空或
+                            # 能力缺失）时回退到原有非流式调用，避免误判为空
+                            # 响应而触发备用模型。
+                            request_call = self.context.llm_generate(**kwargs)
+                            if effective_timeout is not None:
+                                resp = await asyncio.wait_for(request_call, timeout=effective_timeout)
+                            else:
+                                resp = await request_call
                     else:
-                        resp = await request_call
+                        request_call = self.context.llm_generate(**kwargs)
+                        if effective_timeout is not None:
+                            resp = await asyncio.wait_for(request_call, timeout=effective_timeout)
+                        else:
+                            resp = await request_call
                 except asyncio.TimeoutError as exc:
                     raise TimeoutError(f"模型任务 {task_key} 超过 {effective_timeout:.0f} 秒未返回") from exc
                 if resp and resp.completion_text:
                     completion = resp.completion_text.strip()
                     if completion:
-                        sensitive_keyword = self._sensitive_model_replacement_keyword(completion)
+                        response_role = _single_line(getattr(resp, "role", ""), 20).lower()
+                        semantic_provider_error = _looks_like_upstream_llm_error_response(
+                            completion
+                        )
+                        sensitive_keyword = (
+                            ""
+                            if response_role == "err" or semantic_provider_error
+                            else self._sensitive_model_replacement_keyword(completion)
+                        )
                         if sensitive_keyword:
                             if sensitive_replacement and not sensitive_replacement_used:
                                 sensitive_replacement_used = True
                                 candidates.append(sensitive_replacement)
                                 logger.info(
-                                    "[PrivateCompanion] 插件模型命中敏感拒答，切换指定模型重试: provider=%s target=%s keyword=%s",
+                                    "插件模型命中敏感拒答，切换指定模型重试: provider=%s target=%s keyword=%s",
                                     _single_line(attempt_provider, 120),
                                     _single_line(sensitive_replacement, 120),
                                     _single_line(sensitive_keyword, 80),
                                 )
                                 continue
                             logger.warning(
-                                "[PrivateCompanion] 插件指定模型仍返回敏感拒答，丢弃本次文本: provider=%s keyword=%s",
+                                "插件指定模型仍返回敏感拒答，丢弃本次文本: provider=%s keyword=%s",
                                 _single_line(attempt_provider, 120),
                                 _single_line(sensitive_keyword, 80),
                             )
                             return None
-                        response_role = _single_line(getattr(resp, "role", ""), 20).lower()
-                        semantic_provider_error = _looks_like_upstream_llm_error_response(
-                            completion
-                        )
                         if response_role == "err" or semantic_provider_error:
                             failure_code = (
                                 "provider_error_role"
@@ -1710,7 +1870,7 @@ class TokenBudgetMixin:
                             )
                             if attempt_index + 1 < len(candidates):
                                 logger.warning(
-                                    "[PrivateCompanion] 主模型返回 Provider 错误响应,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s kind=%s",
+                                    "主模型返回 Provider 错误响应,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s kind=%s",
                                     _single_line(task_key, 80) or "unknown",
                                     provider_key or "unknown",
                                     _single_line(attempt_provider, 120),
@@ -1719,7 +1879,7 @@ class TokenBudgetMixin:
                                 )
                             else:
                                 logger.warning(
-                                    "[PrivateCompanion] LLM 返回 Provider 错误响应: task=%s provider=%s kind=%s",
+                                    "LLM 返回 Provider 错误响应: task=%s provider=%s kind=%s",
                                     _single_line(task_key, 80) or "unknown",
                                     _single_line(attempt_provider, 120) or "default",
                                     failure_code,
@@ -1737,7 +1897,7 @@ class TokenBudgetMixin:
                         )
                         if attempt_index > 0 or token_routed:
                             logger.info(
-                                "[PrivateCompanion] 备用模型调用成功: task=%s card=%s provider=%s estimated_tokens=%s",
+                                "备用模型调用成功: task=%s card=%s provider=%s estimated_tokens=%s",
                                 _single_line(task_key, 80) or "unknown",
                                 provider_key or "unknown",
                                 _single_line(attempt_provider, 120),
@@ -1757,7 +1917,7 @@ class TokenBudgetMixin:
                 )
                 if attempt_index + 1 < len(candidates):
                     logger.warning(
-                        "[PrivateCompanion] 主模型返回空结果,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s",
+                        "主模型返回空结果,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s",
                         _single_line(task_key, 80) or "unknown",
                         provider_key or "unknown",
                         _single_line(attempt_provider, 120),
@@ -1776,7 +1936,7 @@ class TokenBudgetMixin:
                 )
                 if attempt_index + 1 < len(candidates):
                     logger.warning(
-                        "[PrivateCompanion] 主模型调用失败,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s error=%s",
+                        "主模型调用失败,尝试卡片备用模型: task=%s card=%s primary=%s fallback=%s error=%s",
                         _single_line(task_key, 80) or "unknown",
                         provider_key or "unknown",
                         _single_line(attempt_provider, 120) or "default",
@@ -1785,7 +1945,7 @@ class TokenBudgetMixin:
                     )
                     continue
                 logger.warning(
-                    "[PrivateCompanion] LLM 调用失败: task=%s provider=%s error=%s",
+                    "LLM 调用失败: task=%s provider=%s error=%s",
                     _single_line(task_key, 80) or "unknown",
                     _single_line(attempt_provider, 120) or "default",
                     _single_line(e, 160),
