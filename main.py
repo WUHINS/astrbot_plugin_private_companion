@@ -14412,14 +14412,14 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
                 "reality_touch.continuity",
                 "现实触达连续性",
                 "reality_touch",
-                69,
+                56,
                 lambda: section_call(self._format_reality_touch_continuity_context, current_user),
             )
             add_spec(
                 "reality_touch.mobile_location",
                 "用户手机位置感知",
                 "reality_touch",
-                68,
+                55,
                 lambda: section_call(self._format_mobile_user_location_context, current_user),
                 metadata={"范围": "当前私聊会话", "来源": "用户主动授权的手机前台定位"},
             )
@@ -14445,7 +14445,7 @@ wakeup_type={_single_line(wakeup.get('type'), 40)} score={_single_line(wakeup.ge
             )
         private_context_deferred = self._memory_companion_should_defer_prompt_section("private_context", event, req)
         if not private_context_deferred:
-            add_spec("private.context", "相处线索", "companion", 70, lambda: self._format_private_chat_context_injection(current_user, include_heading=False))
+            add_spec("private.context", "相处线索", "companion", 72, lambda: self._format_private_chat_context_injection(current_user, include_heading=False))
         if is_private_chat and not private_context_deferred:
             add_spec(
                 "memory.private_recall",

@@ -2561,6 +2561,8 @@ const configLabels = {
   enable_memory_companion_open_loop_search: "未完成话题取材",
   enable_memory_companion_feature_context: "功能上下文读取",
   enable_memory_companion_private_recall: "私聊选择性长期召回",
+  enable_memory_companion_private_recall_cross_session: "私聊召回跨会话",
+  memory_companion_context_recall_days: "上下文回溯天数",
   memory_companion_context_top_k: "上下文召回条数",
   memory_companion_context_max_chars: "上下文最大字符数",
   external_image_api_endpoints: "在线生图 API 队列",
@@ -2716,6 +2718,8 @@ const configDescriptions = {
   enable_memory_companion_dream_fragment: "日记生成后将首条梦境碎片写入“我会牢牢记住你”，带上 dream_fragment 标签和查询锚点，支持跨会话梦境连续性。",
   enable_memory_companion_open_loop_search: "主动消息生成前从“我会牢牢记住你”检索未完成的承诺和话题，注入到主动消息提示词中，形成承诺兑现闭环。",
   enable_memory_companion_feature_context: "主动消息生成/复核、当前状态问答、每日穿搭、自然语言生图、QQ 空间互动、群聊主动插话、私下创作和陪伴答疑等链路按需读取“我会牢牢记住你”的结构化上下文。关闭后这些链路不会主动召回记忆。",
+  enable_memory_companion_private_recall_cross_session: "允许私聊选择性召回跨会话的历史记忆，不限当日。关闭后仅在本会话内检索，更早的稳定约定、称呼、边界和偏好不会返回。",
+  memory_companion_context_recall_days: "每次从“我会牢牢记住你”召回记忆时向前回溯的最大天数。0 表示不额外限制，交给外部记忆插件默认窗口；设置如 30 表示只召回 30 天内的记忆。仅在外部插件支持时间参数时生效。",
   memory_companion_context_top_k: "每次从“我会牢牢记住你”召回记忆时的最大条数。条数越多上下文越完整，但提示词更长、Token 消耗更多。",
   memory_companion_context_max_chars: "单次召回记忆上下文的最大字符数上限。超过会被截断。建议 600-1200。",
   enable_rest_reply_simulation: "开启后，日程处于睡眠、午休或休息段时，普通被动回复会先经过休息闸门；未放行时静默不回复。",
@@ -3420,7 +3424,7 @@ const featureSettingGroups = {
   enable_worldbook_member_recognition: ["worldbook_auto_import", "worldbook_member_match_aliases", "worldbook_self_registration", "worldbook_self_registration_block_words", "worldbook_self_registration_block_reply", "worldbook_auto_pending_observations", "worldbook_member_inject_limit", "worldbook_config_paths"],
   enable_cross_user_memory_bridge: ["cross_user_memory_owner_only"],
   enable_atrelay_tools: ["atrelay_require_worldbook_first", "atrelay_member_cache_minutes", "atrelay_sensitive_confirm", "enable_atrelay_llm_rewrite", "atrelay_default_relay_style", "atrelay_multi_target_limit"],
-  enable_livingmemory_integration: ["livingmemory_tool_name", "memory_companion_context_timeout_seconds", "enable_memory_companion_emotional_drift", "enable_memory_companion_cross_window_emotion", "enable_memory_companion_dream_fragment", "enable_memory_companion_open_loop_search", "enable_memory_companion_feature_context", "enable_memory_companion_private_recall", "memory_companion_context_top_k", "memory_companion_context_max_chars"],
+  enable_livingmemory_integration: ["livingmemory_tool_name", "memory_companion_context_timeout_seconds", "enable_memory_companion_emotional_drift", "enable_memory_companion_cross_window_emotion", "enable_memory_companion_dream_fragment", "enable_memory_companion_open_loop_search", "enable_memory_companion_feature_context", "enable_memory_companion_private_recall", "enable_memory_companion_private_recall_cross_session", "memory_companion_context_recall_days", "memory_companion_context_top_k", "memory_companion_context_max_chars"],
   enable_bilibili_integration: ["enable_bilibili_boredom_watch", "bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
   enable_bilibili_boredom_watch: ["bilibili_boredom_min_interval_hours", "bilibili_share_probability", "bilibili_share_min_score"],
   enable_news_integration: ["enable_news_daily_hot_read", "enable_ai_daily_watch", "enable_news_boredom_read", "enable_external_event_self_link", "news_hot_sources", "news_hot_max_items", "news_sources", "ai_daily_sources", "ai_daily_prefer_text_version", "news_min_interval_hours", "news_share_probability", "external_event_self_link_probability", "external_event_self_link_cooldown_hours", "external_link_share_cooldown_hours", "news_max_items_per_source"],
@@ -3557,8 +3561,8 @@ const featureSettingSections = {
     },
     {
       title: "记忆插件桥接联动",
-      note: "仅在检测到“我会牢牢记住你”/MemoryCompanion 桥接时显示。控制情绪漂移、梦境碎片、未完成话题取材和功能上下文读取。",
-      keys: ["enable_memory_companion_emotional_drift", "enable_memory_companion_cross_window_emotion", "enable_memory_companion_dream_fragment", "enable_memory_companion_open_loop_search", "enable_memory_companion_feature_context", "enable_memory_companion_private_recall", "memory_companion_context_top_k", "memory_companion_context_max_chars"],
+      note: "仅在检测到“我会牢牢记住你”/MemoryCompanion 桥接时显示。控制情绪漂移、梦境碎片、未完成话题取材、功能上下文读取、召回跨会话与回溯天数。",
+      keys: ["enable_memory_companion_emotional_drift", "enable_memory_companion_cross_window_emotion", "enable_memory_companion_dream_fragment", "enable_memory_companion_open_loop_search", "enable_memory_companion_feature_context", "enable_memory_companion_private_recall", "enable_memory_companion_private_recall_cross_session", "memory_companion_context_recall_days", "memory_companion_context_top_k", "memory_companion_context_max_chars"],
     },
   ],
   enable_maslow_motivation_experiment: [
@@ -4496,6 +4500,9 @@ const featureSettingTypes = {
   enable_memory_companion_dream_fragment: { type: "checkbox" },
   enable_memory_companion_open_loop_search: { type: "checkbox" },
   enable_memory_companion_feature_context: { type: "checkbox" },
+  enable_memory_companion_private_recall: { type: "checkbox" },
+  enable_memory_companion_private_recall_cross_session: { type: "checkbox" },
+  memory_companion_context_recall_days: { type: "number", min: 0, max: 365, step: 1 },
   memory_companion_context_top_k: { type: "number", min: 1, max: 10, step: 1 },
   memory_companion_context_max_chars: { type: "number", min: 240, max: 1800, step: 60 },
   natural_language_photo_generation_max_daily: { type: "number", min: 0, max: 100, step: 1 },
@@ -28224,13 +28231,15 @@ function featureSettingVisibleForCurrentMode(featureKey, settingKey, settings = 
       "enable_memory_companion_open_loop_search",
       "enable_memory_companion_feature_context",
       "enable_memory_companion_private_recall",
+      "enable_memory_companion_private_recall_cross_session",
+      "memory_companion_context_recall_days",
       "memory_companion_context_top_k",
       "memory_companion_context_max_chars",
     ]);
     if (settingKey === "livingmemory_tool_name" && !livingmemoryAvailable) return false;
     if (companionOnlyKeys.has(settingKey) && !memoryCompanionActive) return false;
     if (settingKey === "enable_memory_companion_cross_window_emotion" && !boolSetting("enable_memory_companion_emotional_drift")) return false;
-    if (["enable_memory_companion_private_recall", "memory_companion_context_top_k", "memory_companion_context_max_chars"].includes(settingKey) && !boolSetting("enable_memory_companion_feature_context")) return false;
+    if (["enable_memory_companion_private_recall", "enable_memory_companion_private_recall_cross_session", "memory_companion_context_recall_days", "memory_companion_context_top_k", "memory_companion_context_max_chars"].includes(settingKey) && !boolSetting("enable_memory_companion_feature_context")) return false;
   }
   if (featureKey === "enable_proactive_only_mode") {
     if (settingKey === "proactive_prompt_template") return boolSetting("enable_llm_proactive_message");

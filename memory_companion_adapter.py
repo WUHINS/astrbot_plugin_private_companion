@@ -6,6 +6,7 @@ import sys
 import uuid
 import asyncio
 import hashlib
+import inspect
 import json
 import re
 import time
@@ -1608,6 +1609,34 @@ class MemoryCompanionAdapterMixin:
             "p5_attestation_consumer": consumer,
         }
 
+    def _memory_companion_context_lookback_kwargs(self, composer) -> dict[str, Any]:
+        """Probe the bridge composer signature and pass time-window params it supports.
+
+        仅当配置 memory_companion_context_recall_days > 0 时透传（0 表示交给外部插件默认窗口）。
+        探测出的参数名多数是别名，逐个列出能保证至少命中一个被支持的。
+        """
+        if not callable(composer):
+            return {}
+        recall_days = _safe_int(getattr(self, "memory_companion_context_recall_days", 0), 0, 0, 3650)
+        if recall_days <= 0:
+            return {}
+        try:
+            params = inspect.signature(composer).parameters
+        except (TypeError, ValueError):
+            return {}
+        supported: dict[str, Any] = {}
+        candidates = {
+            "recall_days": recall_days,
+            "lookback_days": recall_days,
+            "history_days": recall_days,
+            "days": recall_days,
+            "time_range": f"{recall_days}d",
+        }
+        for name, value in candidates.items():
+            if name in params and name not in supported:
+                supported[name] = value
+        return supported
+
     def _memory_companion_schedule_session_context(self, *, message_text: str = "") -> dict[str, Any]:
         user_id, user = self._memory_companion_schedule_owner_context()
         umo = _single_line(user.get("umo"), 200) if isinstance(user, dict) else ""
@@ -1688,6 +1717,7 @@ class MemoryCompanionAdapterMixin:
                 "companion_bot_energy": bot_energy,
             }
             compose_kwargs.update(self._memory_companion_p5_gate_kwargs(event=None, sink="bridge_serialization"))
+            compose_kwargs.update(self._memory_companion_context_lookback_kwargs(composer))
             if self._memory_companion_coordination_status().get("schedule_fast_context") is True:
                 compose_kwargs["retrieval_profile"] = "schedule_fast"
             text = await asyncio.wait_for(
@@ -1835,6 +1865,7 @@ class MemoryCompanionAdapterMixin:
                 "companion_bot_energy": bot_energy,
             }
             compose_kwargs.update(self._memory_companion_p5_gate_kwargs(event=event, sink="bridge_serialization"))
+            compose_kwargs.update(self._memory_companion_context_lookback_kwargs(composer))
             if (
                 kind == "daily_outfit_photo"
                 and self._memory_companion_coordination_status().get("outfit_fast_context") is True
@@ -1934,9 +1965,9 @@ class MemoryCompanionAdapterMixin:
         query = _single_line(
             "当前私聊用户正在说："
             f"{_single_line(text, 260)}。"
-            "只检索当前私聊会话中与本轮直接相关的明确约定、称呼、边界或稳定偏好；"
+            "检索该用户历史私聊与长期记录中与本轮直接相关的稳定约定、称呼、边界或偏好（可含此前会话，不限当日）；"
             "最多保留 3 条，没有可靠依据则返回空。"
-            "禁止引用其他私聊、群聊、公开动态或其他人的信息。",
+            "只引用该用户本人的信息，不要混用其他用户或其他场景的信息。",
             700,
         )
         try:
@@ -1949,7 +1980,7 @@ class MemoryCompanionAdapterMixin:
                 top_k=3,
                 max_chars=min(620, max(240, int(getattr(self, "memory_companion_context_max_chars", 900) or 900))),
                 timeout_seconds=min(1.2, _memory_companion_safe_float(getattr(self, "memory_companion_context_timeout_seconds", 1.2), 1.2, 0.2)),
-                strict_session_only=True,
+                strict_session_only=not bool(getattr(self, "enable_memory_companion_private_recall_cross_session", True)),
             )
         except Exception as exc:
             if self._memory_companion_optional_dependency_failed(exc, where="compose_private_recall"):

@@ -7530,6 +7530,29 @@
           "enable_memory_companion_feature_context": true
         }
       },
+      "enable_memory_companion_private_recall_cross_session": {
+        "description": "私聊召回跨会话",
+        "type": "bool",
+        "hint": "允许私聊选择性召回跨会话的历史记忆，不限当日。关闭后仅在本会话内检索，更早的稳定约定、称呼、边界和偏好不会返回。",
+        "default": true,
+        "condition": {
+          "enable_memory_companion_private_recall": true
+        }
+      },
+      "memory_companion_context_recall_days": {
+        "description": "上下文回溯天数",
+        "type": "int",
+        "hint": "每次从“我会牢牢记住你”召回记忆时向前回溯的最大天数。0 表示不额外限制，交给外部记忆插件默认窗口；设置如 30 表示只召回 30 天内的记忆。仅在外部插件支持时间参数时生效。",
+        "default": 0,
+        "slider": {
+          "min": 0,
+          "max": 365,
+          "step": 1
+        },
+        "condition": {
+          "enable_memory_companion_feature_context": true
+        }
+      },
       "memory_companion_context_top_k": {
         "description": "上下文召回条数",
         "type": "int",

@@ -182,7 +182,7 @@ class PromptCacheAndParallelContextTests(unittest.IsolatedAsyncioTestCase):
         )
 
         by_key = {item["key"]: item for item in collected}
-        self.assertEqual(by_key["reality_touch.mobile_location"]["priority"], 68)
+        self.assertEqual(by_key["reality_touch.mobile_location"]["priority"], 55)
         self.assertIn("已标记地点“公司”", by_key["reality_touch.mobile_location"]["content"])
 
     async def test_colloquial_current_activity_question_triggers_state_context(self) -> None:

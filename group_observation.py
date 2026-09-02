@@ -119,7 +119,11 @@ from .conversation_injection_plan import (
     PLACEMENT_TURN_TAIL,
     get_conversation_injection_plan,
 )
-from .conversation_prompt_section import prompt_section
+from .conversation_prompt_section import (
+    XmlElement,
+    prompt_section,
+    xml_element,
+)
 from .domains.social.group_mood import settle_group_mood, summarize_group_mood
 from .domains.social.roleplay_strength import project_roleplay_strength
 from .domains.social.group_moments import (
@@ -2473,18 +2477,23 @@ class GroupObservationMixin:
         sender_id: str = "",
         now: float | None = None,
     ) -> None:
-        """被动管线注入：氛围摘要 / 名场面 / 扮演强度 / 玩笑边界提醒。"""
+        """被动管线注入：氛围摘要 / 名场面 / 扮演强度 / 玩笑边界提醒。
+
+        这些段只作为当下群聊语感的软参考，统一在段首附一句整体引导，
+        明确它们不覆盖人物画像与长期记忆，仅调节语气与接梗分寸。
+        """
         now = _now_ts() if now is None else max(0.0, _safe_float(now, 0))
+        start = len(sections)
         mood = group.get("social_mood") if isinstance(group.get("social_mood"), dict) else None
         if mood and _persona_value(self, "enable_group_mood_detection", False):
             summary = summarize_group_mood(mood, now=now)
             if summary:
-                sections.append(prompt_section("群聊氛围", summary))
+                sections.append(prompt_section("群聊氛围（当下气氛软参考，与人物画像互相印证）", summary))
         moments = group.get("social_moments") if isinstance(group.get("social_moments"), dict) else None
         if moments and _persona_value(self, "enable_group_moments", False):
             rendered = format_group_moments_prompt(moments, now=now, limit=3)
             if rendered:
-                sections.append(prompt_section("群聊名场面（可选回忆）", rendered))
+                sections.append(prompt_section("群聊名场面（共同回忆软参考，与人物画像互相印证）", rendered))
         if _persona_value(self, "enable_group_roleplay_strength", False) and mood:
             projection = project_roleplay_strength(mood, expression_band="relaxed", now=now)
             voice = _single_line(projection.get("voice"), 200)
@@ -2496,6 +2505,15 @@ class GroupObservationMixin:
                 guard = joke_guard_suggestion(boundary, member_id=sender_id)
                 if guard.get("blocked") or _safe_float(guard.get("sensitivity"), 0) >= 33:
                     sections.append(prompt_section("玩笑边界提醒", guard.get("reason") or ""))
+        if len(sections) > start:
+            sections.insert(
+                start,
+                prompt_section(
+                    "群聊社交语境（整体软参考）",
+                    "以下氛围、名场面、扮演强度与玩笑边界只描述群聊当下的气氛和共同回忆，均为软参考，"
+                    "用于调节表达语气与接梗分寸；它们不高于你对群友的持久画像与长期记忆，也不单独压制回复。",
+                ),
+            )
 
     async def _note_group_joke_boundary_recall(self, group_id: str, sender_id: str) -> bool:
         """群聊撤回事件 → 接梗边界 recall 信号（受 enable_group_joke_guard 控制）。"""
@@ -3251,6 +3269,34 @@ class GroupObservationMixin:
             scene_high_intensity=high_intensity,
             matched_slang=meaning_pairs,
         )
+        content = context.get("content") if isinstance(context, dict) else None
+        if isinstance(content, XmlElement) and content.tag == "group_context":
+            extras: list[XmlElement] = []
+            if _persona_value(self, "enable_group_relationship_graph", False):
+                relationship_text = self._format_group_relationship_graph_for_prompt(
+                    group,
+                    sender_id=sender_id,
+                    text=cleaned,
+                )
+                if relationship_text:
+                    extras.append(xml_element("relationships", text=relationship_text))
+            defer_guidance = getattr(
+                self,
+                "_memory_companion_should_defer_prompt_section",
+                lambda *_args, **_kwargs: False,
+            )("livingmemory_guidance")
+            if not defer_guidance:
+                livingmemory_guidance = self._format_livingmemory_guidance(scope="group", include_heading=False)
+                if livingmemory_guidance:
+                    extras.append(xml_element("memory_guidance", text=livingmemory_guidance))
+            if extras:
+                content = XmlElement(
+                    tag=content.tag,
+                    attrs=content.attrs,
+                    text=content.text,
+                    children=tuple(content.children) + tuple(extras),
+                )
+                context["content"] = content
         return context
 
     def _format_group_current_sender_identity_guard(self, group: dict[str, Any], *, sender_id: str = "", text: str = "") -> str:
