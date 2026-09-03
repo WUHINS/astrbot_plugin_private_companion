@@ -7524,7 +7524,7 @@
       "enable_memory_companion_private_recall": {
         "description": "私聊选择性长期召回",
         "type": "bool",
-        "hint": "当用户明确提到以前、约定、称呼、边界或稳定偏好时，从已联动的外部记忆插件召回当前私聊最多 3 条相关长期记忆。普通闲聊不会检索，不读取其他私聊或群聊；未接入外部记忆插件时不会产生长期召回。",
+        "hint": "当用户明确提到以前、约定、称呼、边界或稳定偏好时，从已联动的外部记忆插件召回当前私聊最多 3 条相关长期记忆。普通闲聊不会检索，不读取其他私聊或群聊；外部记忆插件未接入或召回为空时，会回退使用本插件自带记忆兜底，仍可产生少量本地长期召回。",
         "default": true,
         "condition": {
           "enable_memory_companion_feature_context": true
@@ -7579,6 +7579,29 @@
         },
         "condition": {
           "enable_memory_companion_feature_context": true
+        }
+      },
+      "enable_memory_companion_local_fallback": {
+        "description": "本地记忆兜底",
+        "type": "bool",
+        "hint": "外部记忆插件未安装、读取超时或返回空结果时，回退使用本插件自带记忆（用户画像 companion_memory 与 REQ-041 权威私有记忆）按当前话题相关性补一段召回，避免外部记忆不可用时空召回。仅在能确定用户、且确有相关内容时才注入，不影响外部记忆正常返回的情形。",
+        "default": true,
+        "condition": {
+          "enable_memory_companion_feature_context": true
+        }
+      },
+      "memory_companion_local_fallback_max_chars": {
+        "description": "本地兜底最大字符数",
+        "type": "int",
+        "hint": "本地记忆兜底单次注入的最大字符数上限。超过会被截断。建议 300-800。",
+        "default": 600,
+        "slider": {
+          "min": 240,
+          "max": 1200,
+          "step": 30
+        },
+        "condition": {
+          "enable_memory_companion_local_fallback": true
         }
       }
     }

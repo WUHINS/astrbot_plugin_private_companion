@@ -1755,6 +1755,81 @@ class MemoryCompanionAdapterMixin:
                 pass
         return text[: max(300, int(max_chars or 1200))] if text else ""
 
+    def _memory_companion_local_fallback_available(self) -> bool:
+        """本地记忆兜底是否可用：开关开启且宿主具备本地记忆读取能力。"""
+        if not getattr(self, "enable_memory_companion_local_fallback", True):
+            return False
+        formatter = getattr(self, "_format_companion_memory_for_prompt", None)
+        items_getter = getattr(self, "_companion_memory_relevant_items", None)
+        return callable(formatter) and callable(items_getter)
+
+    def _memory_companion_local_fallback_context(
+        self,
+        *,
+        kind: str,
+        query: str,
+        user: dict[str, Any] | None = None,
+        top_k: int = 5,
+        max_chars: int = 600,
+        strict_session_only: bool = False,
+    ) -> str:
+        """外部记忆召回不可用（未装/超时/异常/空结果）时的本地兜底。
+
+        读取挂在 user 上的自带记忆（companion_memory 用户画像 + REQ-041 权威私有记忆，
+        二者由宿主在 user 层统一投影），按当前话题相关性取若干条作为召回片段返回。
+        仅在确有相关本地记忆且可明确归属到单个用户时返回内容；否则返回 ""，
+        保持原有 fail-closed 语义，不注入无依据的画像。
+        """
+        if strict_session_only:
+            return ""
+        if not self._memory_companion_local_fallback_available():
+            return ""
+        if not isinstance(user, dict):
+            return ""
+        local_top_k = max(1, min(8, _safe_int(top_k, 5, 1)))
+        configured_fallback_chars = _safe_int(getattr(self, "memory_companion_local_fallback_max_chars", 600), 600, 240)
+        local_max_chars = max(240, min(1200, min(configured_fallback_chars, _safe_int(max_chars, 600, 240))))
+        hint = _single_line(query, 600)
+        try:
+            items = self._companion_memory_relevant_items(user, hint=hint, limit=local_top_k)
+        except Exception:
+            items = []
+        if not isinstance(items, list) or not items:
+            return ""
+        facts: list[str] = []
+        for item in items:
+            text = _single_line(item.get("text"), 260)
+            if text and text not in facts:
+                facts.append(text)
+        if not facts:
+            return ""
+        body = "\n".join(f"- {fact}" for fact in facts)[:local_max_chars]
+        if not body:
+            return ""
+        generation_kinds = {
+            "current_state_reply",
+            "daily_diary",
+            "daily_outfit_photo",
+            "natural_photo",
+            "command_photo",
+        }
+        if (
+            kind in generation_kinds
+            or kind.startswith("proactive_")
+            or kind.startswith("qzone_")
+            or kind.startswith("creative_")
+        ):
+            relationship_sanitizer = getattr(self, "_sanitize_generation_relationship_context", None)
+            if callable(relationship_sanitizer):
+                try:
+                    body = relationship_sanitizer(
+                        body,
+                        source=f"memory_companion.local_fallback.{kind}",
+                    )
+                except Exception:
+                    pass
+        return body
+
     async def _memory_companion_compose_feature_context(
         self,
         *,
@@ -1770,10 +1845,24 @@ class MemoryCompanionAdapterMixin:
     ) -> str:
         if not getattr(self, "enable_memory_companion_feature_context", True):
             return ""
+        clean_query = _single_line(query, 1200)
+        if not clean_query:
+            return ""
+
+        def _local_fallback() -> str:
+            return self._memory_companion_local_fallback_context(
+                kind=kind,
+                query=clean_query,
+                user=user,
+                top_k=top_k,
+                max_chars=max_chars,
+                strict_session_only=strict_session_only,
+            )
+
         bridge = self._memory_companion_bridge()
         composer = getattr(bridge, "compose_context", None) if bridge is not None else None
         if not callable(composer):
-            return ""
+            return _local_fallback()
         # Apply configured defaults if caller didn't override
         configured_top_k = getattr(self, "memory_companion_context_top_k", 5)
         configured_max_chars = getattr(self, "memory_companion_context_max_chars", 900)
@@ -1781,9 +1870,6 @@ class MemoryCompanionAdapterMixin:
             top_k = configured_top_k
         if max_chars == 900:
             max_chars = configured_max_chars
-        clean_query = _single_line(query, 1200)
-        if not clean_query:
-            return ""
         if (
             kind in {"daily_outfit_photo", "daily_diary"}
             and event is None
@@ -1835,8 +1921,9 @@ class MemoryCompanionAdapterMixin:
             umo = _single_line(user.get("umo"), 200)
             preferred_address = _single_address(user.get("nickname"), 24)
             if not user_id and not umo:
-                # 无用户标识：无法在 memory 插件侧隔离会话作用域，宁可召回为空也不跨用户串线。
-                return ""
+                # 无用户标识：无法在 memory 插件侧隔离会话作用域，外部召回 fail-closed；
+                # 本地兜底只读该 user 自带记忆（宿主侧已按用户隔离），可安全回退。
+                return _local_fallback()
             session_context = {
                 "session_id": umo or f"private_companion:{kind}:{user_id or 'unknown'}",
                 "scope": "private" if user_id else "unknown",
@@ -1852,7 +1939,7 @@ class MemoryCompanionAdapterMixin:
             }
         else:
             # 无 event 且无 user：无法确定当前对话用户，fail-closed，宁可召回为空也不跨用户串线。
-            return ""
+            return _local_fallback()
         try:
             bot_mood, bot_energy = self._memory_companion_bot_emotional_state()
             configured_timeout = max(0.2, min(6.0, _memory_companion_safe_float(getattr(self, "memory_companion_context_timeout_seconds", 1.2), 1.2, 0.2)))
@@ -1881,20 +1968,20 @@ class MemoryCompanionAdapterMixin:
                 _single_line(kind, 60),
                 max(0.2, min(6.0, min(_memory_companion_safe_float(getattr(self, "memory_companion_context_timeout_seconds", 1.2), 1.2, 0.2), _memory_companion_safe_float(timeout_seconds, 1.2, 0.2)))),
             )
-            return ""
+            return _local_fallback()
         except Exception as exc:
             if self._memory_companion_optional_dependency_failed(exc, where=f"compose_feature_context:{kind}"):
-                return ""
+                return _local_fallback()
             logger.debug("MemoryCompanion 功能上下文读取失败: kind=%s err=%s", _single_line(kind, 60), _single_line(exc, 120))
-            return ""
+            return _local_fallback()
         text = str(text or "").strip()
         if not text:
-            return ""
+            return _local_fallback()
         text = self._memory_companion_filter_internal_error_context(text)
         if not text:
-            return ""
+            return _local_fallback()
         if "没有检索到足够相关的长期记忆" in text and text.count("\n- ") <= 1:
-            return ""
+            return _local_fallback()
         generation_kinds = {
             "current_state_reply",
             "daily_diary",
