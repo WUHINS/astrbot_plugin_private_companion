@@ -3007,8 +3007,41 @@ class UserMemoryMixin:
         *,
         bump_revision: bool,
     ) -> dict[str, Any]:
-        """Bind durable evidence/rules without repairing a mismatched existing owner."""
-        result = bind_expression_profile(profile, context, bump_revision=bump_revision)
+        """Bind durable evidence/rules, migrating stale runtime scope metadata.
+
+        Profiles live under a stable user/group record, but their ownership
+        envelope also contains persona and migration-epoch metadata.  A persona
+        switch or an upgrade can therefore leave an otherwise valid profile
+        carrying an old envelope.  Rebinding the envelope is safe at this
+        storage boundary and preserves the learned content; explicit callers
+        that bind an item/profile directly still retain strict validation.
+        """
+        try:
+            result = bind_expression_profile(profile, context, bump_revision=bump_revision)
+        except ValueError as exc:
+            if str(exc) != "expression_profile_scope_mismatch":
+                raise
+            result = deepcopy(profile)
+            # The profile remains in the same owner record, so keep its
+            # monotonic revision while replacing only stale scope metadata.
+            result.pop("scope_ownership", None)
+            result["scope_revision"] = max(1, _safe_int(result.get("scope_revision"), 1, 1))
+            for key in (
+                "samples", "pending_samples", "expression_rules", "pending_rules",
+                "learned_rules", "rejected_samples", "revoked_samples",
+                "rejected_rules", "revoked_rules",
+            ):
+                items = result.get(key)
+                if not isinstance(items, list):
+                    continue
+                migrated: list[Any] = []
+                for item in items:
+                    if isinstance(item, dict):
+                        item = deepcopy(item)
+                        item.pop("scope_binding", None)
+                    migrated.append(item)
+                result[key] = migrated
+            result = bind_expression_profile(result, context, bump_revision=False)
         collections = (
             ("samples", "approved", "automatic_policy"),
             ("pending_samples", "pending", ""),

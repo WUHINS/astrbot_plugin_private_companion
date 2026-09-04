@@ -521,7 +521,7 @@ class FinalResponsePersistenceTests(unittest.IsolatedAsyncioTestCase):
             ["user", "assistant"],
             [item["role"] for item in harness.conversation_manager.history[-2:]],
         )
-        self.assertEqual("【主动承接占位】", harness.conversation_manager.history[-2]["content"])
+        self.assertEqual("", harness.conversation_manager.history[-2]["content"])
         self.assertEqual(["实际发出的主动消息"], captured)
 
     async def test_livingmemory_prefers_plugin_public_handler_when_available(self):
@@ -664,6 +664,35 @@ class FinalResponsePersistenceTests(unittest.IsolatedAsyncioTestCase):
             task,
             "segmented_llm_remainder",
         )
+        await plugin.persist_confirmed_passive_reply(event)
+
+        plugin._finalize_passive_delivered_response.assert_awaited_once()
+        call = plugin._finalize_passive_delivered_response.await_args
+        self.assertEqual("第一段\n第二段", call.kwargs["fallback_text"])
+
+    async def test_passive_finalizer_waits_for_tts_remainder(self):
+        plugin = PrivateCompanionPlugin.__new__(PrivateCompanionPlugin)
+        plugin._finalize_passive_delivered_response = AsyncMock(return_value=True)
+        event = _SendTrackerEvent()
+        event._has_send_oper = False
+        run_context = SimpleNamespace(
+            messages=[Message(role="assistant", content=[TextPart(text="原始回复")])]
+        )
+
+        plugin._begin_final_response_persistence(event)
+        await plugin._prepare_final_response_after_agent(
+            event,
+            run_context,
+            LLMResponse(role="assistant", completion_text="第一段第二段"),
+        )
+        await event.send(SimpleNamespace(chain=[Plain("第一段")]))
+
+        async def send_tts_remainder():
+            await asyncio.sleep(0)
+            await event.send(SimpleNamespace(chain=[Plain("第二段")]))
+
+        task = asyncio.create_task(send_tts_remainder())
+        plugin._track_final_response_background_task(task, "tts_reply_remainder")
         await plugin.persist_confirmed_passive_reply(event)
 
         plugin._finalize_passive_delivered_response.assert_awaited_once()

@@ -1760,6 +1760,7 @@ const embeddedFeatureParentByKey = {
   enable_daily_outfit_photo: "enable_photo_text_action",
   enable_creative_cover_generation: "enable_photo_text_action",
   enable_natural_language_photo_generation: "enable_photo_text_action",
+  enable_user_requested_photo_generation: "enable_photo_text_action",
   enable_local_photo_load_guard: "enable_photo_text_action",
   enable_reading_archive_boredom_read: "enable_reading_archive_integration",
   enable_reading_archive_ask_recommendation: "enable_reading_archive_integration",
@@ -2424,6 +2425,7 @@ const configLabels = {
   qzone_comment_inbox_recent_posts: "扫描最近说说数",
   qzone_comment_inbox_max_replies_per_tick: "每轮最多回复",
   enable_photo_text_action: "主动拍照/生图",
+  enable_user_requested_photo_generation: "允许用户请求生图",
   photo_action_max_daily: "每日主动生图上限",
   proactive_photo_text_probability: "主动带图触发概率",
   photo_generation_backend: "主动生图后端",
@@ -3113,6 +3115,7 @@ const configDescriptions = {
   daily_outfit_photo_prompt: "可选。给每日穿搭补充偏好，例如校服、便服、季节感、配色或固定饰品；留空则优先根据当天日程里的上课、出门、居家、雨天、换衣和饰品线索自动组织。",
   daily_outfit_rotation_days: "保留最近成功生成的穿搭档案，并优先避开相同主色、外层和轮廓。每次至少换掉最近一套的两个可见维度，手动重生也会轮换。",
   enable_natural_language_photo_generation: "只控制“规则快判”模式是否允许插件在主链前直接接管生图。默认建议用工具优先，让主链模型调用 pc_generate_photo；工具不稳定时再切到规则快判。",
+  enable_user_requested_photo_generation: "控制用户是否可以通过显式指令、规则快判或主链工具请求生图/改图；关闭不影响 Bot 主动生图。",
   natural_language_photo_generation_mode: "tool_first：普通聊天先进主链，由模型调用 pc_generate_photo；rule_fast：插件在主链前用规则直接接管高置信生图请求；off：不做非指令生图前置处理。",
   photo_generation_private_owner_max_daily: "主要用户在私聊中生图/改图的每日额度；-1 表示不限量，0 表示不允许，正数表示每日限额。",
   photo_generation_private_friend_max_daily: "其他陪伴用户在私聊中生图/改图的每日额度；-1 表示不限量，0 表示不允许，正数表示每日限额。",
@@ -3438,7 +3441,7 @@ const featureSettingGroups = {
   enable_qzone_life_publish: ["qzone_life_publish_min_interval_hours", "qzone_life_publish_intra_day_gap_minutes", "qzone_life_publish_probability", "qzone_life_publish_max_daily", "qzone_life_publish_window_mode", "qzone_life_publish_windows", "qzone_life_publish_allow_insomnia_night", "qzone_life_publish_similarity_threshold", "qzone_publish_style_prompt"],
   enable_qzone_generated_image_publish: ["qzone_generated_image_probability", "qzone_publish_image_style_prompt"],
   enable_qzone_comment_inbox: ["qzone_comment_inbox_interval_minutes", "qzone_comment_inbox_recent_posts", "qzone_comment_inbox_max_replies_per_tick"],
-  enable_photo_text_action: ["photo_generation_private_owner_max_daily", "photo_generation_private_friend_max_daily", "photo_generation_group_max_daily", "photo_generation_proactive_max_daily", "photo_generation_backend", "photo_action_max_daily", "proactive_photo_text_probability", "custom_photo_tool_name", "custom_photo_tool_prompt_param", "custom_photo_tool_kind_param", "custom_photo_tool_reference_param", "custom_photo_tool_extra_params", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "external_image_download_proxy", "external_image_download_use_environment_proxy", "enable_photo_reference_image", "photo_reference_catalog", "enable_group_nsfw_private_fallback", "group_nsfw_image_review_mode", "group_nsfw_image_review_sensitivity", "group_nsfw_image_review_min_confidence", "group_nsfw_image_review_timeout_seconds", "group_nsfw_image_review_max_dimension", "group_nsfw_image_review_failure_action", "group_nsfw_image_review_custom_prompt", "enable_daily_outfit_photo", "enable_creative_cover_generation", "daily_outfit_photo_prompt", "daily_outfit_rotation_days", "natural_language_photo_generation_mode", "command_photo_generation_max_daily", "photo_generation_trace_max_size_kb", "photo_generation_trace_backup_count", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "natural_language_photo_extra_prompt", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "photo_generation_prompt_format", "photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_negative_prompt_mode", "photo_generation_negative_prompt", "photo_generation_text2img_negative_prompt", "photo_generation_selfie_negative_prompt", "photo_generation_edit_negative_prompt", "photo_generation_fixed_prompt", "photo_generation_text2img_fixed_prompt", "photo_generation_selfie_fixed_prompt", "photo_generation_edit_fixed_prompt", "photo_generation_scene_presets", "enable_bot_relationship_network", "bot_relationship_cards"],
+  enable_photo_text_action: ["enable_user_requested_photo_generation", "photo_generation_private_owner_max_daily", "photo_generation_private_friend_max_daily", "photo_generation_group_max_daily", "photo_generation_proactive_max_daily", "photo_generation_backend", "photo_action_max_daily", "proactive_photo_text_probability", "custom_photo_tool_name", "custom_photo_tool_prompt_param", "custom_photo_tool_kind_param", "custom_photo_tool_reference_param", "custom_photo_tool_extra_params", "COMFYUI_TEXT2IMG_WORKFLOW_NAME", "COMFYUI_SELFIE_WORKFLOW_NAME", "external_image_download_proxy", "external_image_download_use_environment_proxy", "enable_photo_reference_image", "photo_reference_catalog", "enable_group_nsfw_private_fallback", "group_nsfw_image_review_mode", "group_nsfw_image_review_sensitivity", "group_nsfw_image_review_min_confidence", "group_nsfw_image_review_timeout_seconds", "group_nsfw_image_review_max_dimension", "group_nsfw_image_review_failure_action", "group_nsfw_image_review_custom_prompt", "enable_daily_outfit_photo", "enable_creative_cover_generation", "daily_outfit_photo_prompt", "daily_outfit_rotation_days", "natural_language_photo_generation_mode", "command_photo_generation_max_daily", "photo_generation_trace_max_size_kb", "photo_generation_trace_backup_count", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "natural_language_photo_extra_prompt", "comfyui_photo_wait_seconds", "enable_local_photo_load_guard", "local_photo_cpu_busy_percent", "local_photo_memory_busy_percent", "local_photo_defer_minutes", "photo_generation_prompt_format", "photo_generation_style", "photo_generation_style_custom_prompt", "photo_generation_negative_prompt_mode", "photo_generation_negative_prompt", "photo_generation_text2img_negative_prompt", "photo_generation_selfie_negative_prompt", "photo_generation_edit_negative_prompt", "photo_generation_fixed_prompt", "photo_generation_text2img_fixed_prompt", "photo_generation_selfie_fixed_prompt", "photo_generation_edit_fixed_prompt", "photo_generation_scene_presets", "enable_bot_relationship_network", "bot_relationship_cards"],
   enable_screen_glance_action: ["screen_peek_max_daily", "screen_peek_cooldown_minutes", "enable_goodnight_screen_check", "goodnight_screen_check_delay_minutes", "enable_unanswered_screen_peek_followup", "unanswered_screen_peek_after_minutes", "unanswered_screen_peek_cooldown_minutes"],
   enable_poke_action: ["poke_action_max_times", "poke_action_cooldown_minutes"],
   enable_reactive_poke: ["reactive_poke_trigger_probability", "reactive_poke_normal_reply_probability", "reactive_poke_back_probability", "reactive_poke_super_poke_probability", "reactive_poke_back_times", "reactive_poke_super_poke_times", "reactive_poke_interval", "reactive_poke_normal_replies", "reactive_poke_prompts", "reactive_poke_back_prompts"],
@@ -4145,9 +4148,9 @@ const featureSettingSections = {
       keys: ["photo_generation_backend", "natural_language_photo_generation_mode", "enable_natural_language_photo_generation", "natural_language_photo_generation_max_daily", "natural_language_photo_extra_prompt"],
     },
     {
-      title: "用户请求生图",
-      note: "分别设置主要用户私聊、其他陪伴用户私聊、群聊和 Bot 主动生图的每日额度，并设置显式陪伴生图指令与主链生图工具的共同额度；-1 表示不限量，0 表示不允许，正数表示每日限额。",
-      keys: ["photo_generation_private_owner_max_daily", "photo_generation_private_friend_max_daily", "photo_generation_group_max_daily", "photo_generation_proactive_max_daily", "command_photo_generation_max_daily"],
+      title: "生图数量限制",
+      note: "用户请求开关控制显式指令、规则快判和主链生图工具；Bot 主动生图保持独立。每日额度中 -1 表示不限量，0 表示不允许，正数表示每日限额。",
+      keys: ["enable_user_requested_photo_generation", "photo_generation_private_owner_max_daily", "photo_generation_private_friend_max_daily", "photo_generation_group_max_daily", "command_photo_generation_max_daily", "photo_generation_proactive_max_daily"],
     },
     {
       title: "生图可观测日志",
@@ -7013,22 +7016,60 @@ async function goToImageCachePage(targetPage) {
   $("#imageCacheList")?.scrollTo({ top: 0, behavior: "smooth" });
 }
 
+let troubleshootingLoadPromise = null;
+let troubleshootingRefreshTimer = null;
+const TROUBLESHOOTING_REFRESH_INTERVAL_MS = 45 * 1000;
+
 async function loadTroubleshooting(options = {}) {
   const { silent = false, skipExperimentalRender = false } = options;
-  const [data, overview] = await Promise.all([
-    fetchJson("/troubleshooting"),
-    fetchJson("/overview").catch(() => null),
-  ]);
-  state.troubleshooting = data || null;
-  if (overview) {
-    state.overview = overview;
-    syncExternalCompanionVisibility();
-    syncFeatureDraftFromOverview(overview);
+  if (!troubleshootingLoadPromise) {
+    troubleshootingLoadPromise = (async () => {
+      const [data, overview] = await Promise.all([
+        fetchJson("/troubleshooting"),
+        fetchJson("/overview").catch(() => null),
+      ]);
+      state.troubleshooting = data || null;
+      if (overview) {
+        state.overview = overview;
+        syncExternalCompanionVisibility();
+        syncFeatureDraftFromOverview(overview);
+      }
+      return data;
+    })();
+  }
+  const request = troubleshootingLoadPromise;
+  let data;
+  try {
+    data = await request;
+  } finally {
+    if (troubleshootingLoadPromise === request) troubleshootingLoadPromise = null;
   }
   if (!silent) renderTroubleshooting();
   if (state.activeTab === "experimental" && !skipExperimentalRender) renderExperimentalPage();
   return data;
 }
+
+function stopTroubleshootingRefreshTimer() {
+  if (troubleshootingRefreshTimer !== null) {
+    window.clearInterval(troubleshootingRefreshTimer);
+    troubleshootingRefreshTimer = null;
+  }
+}
+
+function syncTroubleshootingRefreshTimer() {
+  stopTroubleshootingRefreshTimer();
+  if (state.activeTab !== "troubleshooting" || document.visibilityState !== "visible") return;
+  troubleshootingRefreshTimer = window.setInterval(() => {
+    if (state.activeTab !== "troubleshooting" || document.visibilityState !== "visible") {
+      stopTroubleshootingRefreshTimer();
+      return;
+    }
+    loadTroubleshooting({ skipExperimentalRender: true }).catch(() => null);
+  }, TROUBLESHOOTING_REFRESH_INTERVAL_MS);
+}
+
+document.addEventListener("visibilitychange", syncTroubleshootingRefreshTimer);
+window.addEventListener("pagehide", stopTroubleshootingRefreshTimer);
 
 async function loadDailyReview(force = false) {
   if (state.lazyLoaded.dailyReview && !force && state.dailyReview) return state.dailyReview;
@@ -9033,13 +9074,14 @@ const setupGuideAdvancedItems = {
       ],
       kind: "feature",
       settings: [
-        { key: "photo_generation_private_owner_max_daily", type: "number", label: "主要用户私聊每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。" },
-        { key: "photo_generation_private_friend_max_daily", type: "number", label: "其他陪伴用户私聊每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。" },
-        { key: "photo_generation_group_max_daily", type: "number", label: "群聊生图每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。" },
+        { key: "enable_user_requested_photo_generation", type: "bool", kind: "setting", label: "允许用户请求生图", description: "关闭后，用户不能通过指令、规则快判或主链工具请求生图；Bot 主动生图不受影响。" },
+        { key: "photo_generation_private_owner_max_daily", type: "number", label: "主要用户私聊每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。", showWhen: (draft) => photoSettingVisibleForValues("photo_generation_private_owner_max_daily", draft) },
+        { key: "photo_generation_private_friend_max_daily", type: "number", label: "其他陪伴用户私聊每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。", showWhen: (draft) => photoSettingVisibleForValues("photo_generation_private_friend_max_daily", draft) },
+        { key: "photo_generation_group_max_daily", type: "number", label: "群聊生图每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。", showWhen: (draft) => photoSettingVisibleForValues("photo_generation_group_max_daily", draft) },
         { key: "photo_generation_proactive_max_daily", type: "number", label: "Bot 主动生图每日上限", placeholder: "-1（不限量）", min: -1, max: 100, step: 1, description: "-1 表示不限量，0 表示不允许，正数表示每日限额。" },
         { key: "photo_generation_backend", type: "select", label: "生图后端", options: [["auto", "自动：在线 API → ComfyUI → SDGen"], ["external", "只用在线图片 API"], ["comfyui", "只用 ComfyUI"], ["sdgen", "只用 SDGen"], ["tool_call", "函数工具（调用其他插件的生图工具）"], ["nai", "只用 NAI 生图插件（直连）"]], description: "这里仅选择后端；在线 API 凭据和队列统一在“模型配置 → 生图模型”维护。" },
         { key: "natural_language_photo_generation_mode", type: "select", label: "非指令生图处理方式", options: [["tool_first", "工具优先：主链调用 pc_generate_photo"], ["rule_fast", "规则快判：插件前置接管"], ["off", "关闭：不做前置接管"]], description: "注册生图工具后建议用工具优先；只有工具调用不稳定时再用规则快判。" },
-        { key: "command_photo_generation_max_daily", type: "number", label: "用户请求每日上限", placeholder: "-1（不限量）", min: -1, max: 100, description: "显式陪伴生图指令与主链 pc_generate_photo 工具共用；-1 表示不限量，0 表示不允许用户请求生图/改图。" },
+        { key: "command_photo_generation_max_daily", type: "number", label: "用户请求每日上限", placeholder: "-1（不限量）", min: -1, max: 100, description: "显式陪伴生图指令与主链 pc_generate_photo 工具共用；-1 表示不限量，0 表示不允许用户请求生图/改图。", showWhen: (draft) => photoSettingVisibleForValues("command_photo_generation_max_daily", draft) },
         { key: "photo_generation_trace_max_size_kb", type: "number", label: "生图日志单文件大小（KB）", placeholder: "0", min: 0, max: 102400, description: "仅排障时开启；事件日志和逐次提示词调试文件可能包含会话标识、用户请求、完整提示词和本地参考图路径。0 表示全部关闭。" },
         { key: "photo_generation_trace_backup_count", type: "number", label: "生图日志轮转备份数", placeholder: "5", min: 0, max: 20, description: "轮转时保留 photo_generation_trace.1.txt 等历史日志的数量。0 表示不保留旧文件。" },
         { key: "enable_natural_language_photo_generation", type: "bool", kind: "setting", label: "允许规则快判生图/改图", description: "开启后，插件会在主链前直接接管高置信图片请求。", showWhen: (draft) => photoSettingVisibleForValues("enable_natural_language_photo_generation", draft) },
@@ -13324,6 +13366,10 @@ function testDiagnosticFacts(result = {}) {
     ["完成时间", result.ran_at_text || testDiagnosticTimeText(result.finished_at || result.ran_at) || "未记录"],
     ["错误类别", result.error_category || "无"],
     ["异常类型", result.exception_type || "无"],
+    ["调用插件", result.called_plugin_name || result.called_plugin || ""],
+    ["插件版本", result.called_plugin_version || ""],
+    ["插件协议", result.called_plugin_api_version || result.called_plugin_status_schema || ""],
+    ["可用性依据", result.availability_source || ""],
     ["Provider", result.provider || result.provider_id || ""],
     ["数据来源", result.source || ""],
     ["地点", result.location_label || ""],
@@ -13502,6 +13548,41 @@ function showTestDiagnosticDialog(title, result) {
   if (dialog.open) return;
   if (typeof dialog.showModal === "function") dialog.showModal();
   else dialog.setAttribute("open", "");
+}
+
+async function recoverCompletedTroubleshootingTest(
+  testType,
+  previousResult = {},
+  requestedAtMs = Date.now(),
+  timeoutMs = 14 * 60 * 1000,
+) {
+  const previousRequestId = String(previousResult?.request_id || previousResult?.trace_id || "");
+  const previousFinishedAt = Number(previousResult?.finished_at || previousResult?.ran_at || 0);
+  const recoveryWindowStartedAt = Number.isFinite(Number(requestedAtMs))
+    ? Number(requestedAtMs)
+    : Date.now();
+  while (Date.now() - recoveryWindowStartedAt < timeoutMs) {
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    try {
+      await loadTroubleshooting({ silent: true, skipExperimentalRender: true });
+    } catch (_error) {
+      continue;
+    }
+    const result = state.troubleshooting?.chain_tests?.[testType];
+    if (!result || typeof result !== "object") continue;
+    const requestId = String(result.request_id || result.trace_id || "");
+    const finishedAt = Number(result.finished_at || result.ran_at || 0);
+    const belongsToCurrentRun = previousRequestId
+      ? requestId && requestId !== previousRequestId
+      : finishedAt * 1000 >= requestedAtMs - 5000;
+    if (
+      belongsToCurrentRun
+      && finishedAt > previousFinishedAt
+    ) {
+      return result;
+    }
+  }
+  return null;
 }
 
 function resolveTestDiagnosticResult(source, key) {
@@ -28090,6 +28171,7 @@ function featureRelatedSettings(key) {
       reaction_expression_embedding_backfill_batch_size: 24,
       reaction_expression_embedding_backfill_interval_seconds: 300,
       reaction_expression_semantic_trigger_enabled: true,
+      enable_user_requested_photo_generation: true,
     };
     return Object.prototype.hasOwnProperty.call(defaults, name) ? defaults[name] : undefined;
   };
@@ -28121,6 +28203,13 @@ function featureRelatedSettings(key) {
 function photoSettingVisibleForValues(settingKey, values = {}) {
   const backend = String(values.photo_generation_backend || "auto").trim().toLowerCase();
   const enabled = (key) => toBool(values[key]);
+  const userRequestLimits = new Set([
+    "photo_generation_private_owner_max_daily",
+    "photo_generation_private_friend_max_daily",
+    "photo_generation_group_max_daily",
+    "command_photo_generation_max_daily",
+  ]);
+  if (userRequestLimits.has(settingKey) && !enabled("enable_user_requested_photo_generation")) return false;
   const naiUnavailable = new Set([
     "enable_p5_structured_reference_assets",
     "photo_generation_style",
@@ -31457,6 +31546,7 @@ function bindFeatureDetailActions() {
             state.selectedFeatureKey === "enable_photo_text_action"
             && [
               "enable_photo_reference_image",
+              "enable_user_requested_photo_generation",
               "enable_group_nsfw_private_fallback",
               "enable_daily_outfit_photo",
               "enable_natural_language_photo_generation",
@@ -38883,6 +38973,7 @@ function switchTab(tabName) {
       });
     }
     state.activeTab = tabName;
+    syncTroubleshootingRefreshTimer();
     tabs.forEach((item) => item.classList.toggle("is-active", item.dataset.tab === tabName));
     revealActiveTab(tabs.find((item) => item.dataset.tab === tabName), reduceMotion);
     document.querySelectorAll(".panel").forEach((item) => {
@@ -39546,6 +39637,8 @@ document.addEventListener("click", async (event) => {
   if (troubleshootingTest) {
     const testType = troubleshootingTest.dataset.troubleshootingTest || "";
     const workflowKind = troubleshootingTest.dataset.troubleshootingWorkflowKind || "";
+    const previousResult = state.troubleshooting?.chain_tests?.[testType] || {};
+    const requestedAtMs = Date.now();
     setActionBusy(troubleshootingTest, true);
     try {
       const result = await postJson("/troubleshooting/test", { type: testType, workflow_kind: workflowKind });
@@ -39575,6 +39668,22 @@ document.addEventListener("click", async (event) => {
         showToast(result.ok ? "链路测试通过" : `链路测试失败：${result.error || "未返回有效结果"}`, result.ok ? "success" : "error");
       }
     } catch (error) {
+      const recovered = testType.startsWith("image_generation")
+        ? await recoverCompletedTroubleshootingTest(testType, previousResult, requestedAtMs)
+        : null;
+      if (recovered) {
+        state.troubleshooting = state.troubleshooting || {};
+        state.troubleshooting.chain_tests = {
+          ...(state.troubleshooting.chain_tests || {}),
+          [testType]: recovered,
+        };
+        renderTroubleshooting();
+        showToast(
+          recovered.ok ? "链路测试通过" : `链路测试失败：${recovered.error || "未返回有效结果"}`,
+          recovered.ok ? "success" : "error",
+        );
+        return;
+      }
       state.troubleshooting = state.troubleshooting || {};
       state.troubleshooting.chain_tests = {
         ...(state.troubleshooting.chain_tests || {}),

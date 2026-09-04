@@ -16,6 +16,7 @@ from astrbot.api.event import AstrMessageEvent
 
 from .constants import DEFAULT_NATURAL_LANGUAGE_PHOTO_EXTRA_PROMPT
 from .helpers import _flat_get, _missing_optional_model_dependency, _now_ts, _path_text, _photo_group_request_matches, _safe_float, _safe_int, _set_into_config, _single_line, _today_key
+from .logging_util import get_module_logger
 from .photo_generation_scope import PHOTO_GENERATION_SCOPE_LIMIT_KEYS
 from .photo_reference_catalog import (
     CATALOG_VERSION,
@@ -30,6 +31,8 @@ from .photo_prompt_context import PhotoPromptSection
 from .persona_config import runtime_persona_setting
 from .runtime_config_dispatcher import dispatch_runtime_config_effects
 
+
+logger = get_module_logger(__name__)
 
 _PHOTO_REFERENCE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp"}
 
@@ -442,7 +445,7 @@ class CommandHandlersMixin:
             f"智能沉默：{self._feature_on_text(runtime_persona_setting(self, 'enable_smart_silence', True))}，模式 {runtime_persona_setting(self, 'smart_silence_judge_mode', 'boundary_only')}，置信度 {silence_confidence_text}，超时 {runtime_persona_setting(self, 'smart_silence_model_timeout_seconds', 0)} 秒",
             f"被动回复复核：{self._feature_on_text(runtime_persona_setting(self, 'enable_passive_response_review', runtime_persona_setting(self, 'enable_response_self_review', True)))}，模式 {runtime_persona_setting(self, 'passive_review_mode', runtime_persona_setting(self, 'response_review_mode', 'severe_only'))}，强度 {runtime_persona_setting(self, 'passive_review_strength', 'lenient')}，长度阈值 {runtime_persona_setting(self, 'response_review_max_chars', 260)} 字；框架异常文本外发拦截：{self._feature_on_text(runtime_persona_setting(self, 'enable_framework_error_leak_guard', True))}",
             f"主动消息终审：{self._feature_on_text(runtime_persona_setting(self, 'enable_proactive_message_review', True))}，模式 {runtime_persona_setting(self, 'proactive_review_mode', 'full')}，强度 {runtime_persona_setting(self, 'proactive_review_strength', 'lenient')}",
-            f"用户请求生图每日上限：{command_photo_limit_text}；非指令生图：{_single_line(runtime_persona_setting(self, 'natural_language_photo_generation_mode', 'tool_first'), 24) or 'tool_first'}，规则快判{self._feature_on_text(runtime_persona_setting(self, 'enable_natural_language_photo_generation', False))}，每日上限 {runtime_persona_setting(self, 'natural_language_photo_generation_max_daily', 0)}",
+            f"用户请求生图：{self._feature_on_text(runtime_persona_setting(self, 'enable_user_requested_photo_generation', True))}，每日上限 {command_photo_limit_text}；非指令生图：{_single_line(runtime_persona_setting(self, 'natural_language_photo_generation_mode', 'tool_first'), 24) or 'tool_first'}，规则快判{self._feature_on_text(runtime_persona_setting(self, 'enable_natural_language_photo_generation', False))}，每日上限 {runtime_persona_setting(self, 'natural_language_photo_generation_max_daily', 0)}",
             f"拟人状态：健康 {self._feature_on_text(runtime_persona_setting(self, 'enable_health_state', True))}，饥饿 {self._feature_on_text(runtime_persona_setting(self, 'enable_hunger_state', True))}，生理期 {self._feature_on_text(runtime_persona_setting(self, 'enable_cycle_state', True))}，强度 {runtime_persona_setting(self, 'humanized_state_intensity', 0)}",
             self._cycle_status_text(),
             f"回复风格：{'已配置' if reply_style else '未配置'}，长度 {len(reply_style)} 字",
@@ -776,6 +779,7 @@ class CommandHandlersMixin:
                 "label": "非指令生图处理方式",
             },
             "enable_natural_language_photo_generation": {"type": "bool", "label": "允许规则快判生图/改图"},
+            "enable_user_requested_photo_generation": {"type": "bool", "label": "允许用户请求生图"},
             "photo_generation_private_owner_max_daily": {"type": "int", "min": -1, "max": 100, "label": "主要用户私聊生图每日上限"},
             "photo_generation_private_friend_max_daily": {"type": "int", "min": -1, "max": 100, "label": "其他陪伴用户私聊生图每日上限"},
             "photo_generation_group_max_daily": {"type": "int", "min": -1, "max": 100, "label": "群聊生图每日上限"},
@@ -1017,11 +1021,12 @@ class CommandHandlersMixin:
             "humanized_state_intensity": "拓展页 -> 功能开关 -> 拟人状态 -> 状态强度",
             "natural_language_photo_generation_mode": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 非指令生图/改图",
             "enable_natural_language_photo_generation": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 非指令生图/改图",
-            "photo_generation_private_owner_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 用户请求生图",
-            "photo_generation_private_friend_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 用户请求生图",
-            "photo_generation_group_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 用户请求生图",
-            "photo_generation_proactive_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 用户请求生图",
-            "command_photo_generation_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 用户请求生图",
+            "enable_user_requested_photo_generation": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
+            "photo_generation_private_owner_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
+            "photo_generation_private_friend_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
+            "photo_generation_group_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
+            "photo_generation_proactive_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
+            "command_photo_generation_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图数量限制",
             "photo_generation_trace_max_size_kb": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图可观测日志",
             "photo_generation_trace_backup_count": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 生图可观测日志",
             "natural_language_photo_generation_max_daily": "拓展页 -> 功能开关 -> 长线主动 -> 生图/拍照能力详情 -> 非指令生图/改图",
@@ -1163,6 +1168,8 @@ class CommandHandlersMixin:
             "用户请求生图上限": "command_photo_generation_max_daily",
             "指令生图上限": "command_photo_generation_max_daily",
             "陪伴生图上限": "command_photo_generation_max_daily",
+            "允许用户请求生图": "enable_user_requested_photo_generation",
+            "用户请求生图开关": "enable_user_requested_photo_generation",
             "生图日志大小": "photo_generation_trace_max_size_kb",
             "生图日志轮转数": "photo_generation_trace_backup_count",
             "生图日志备份数": "photo_generation_trace_backup_count",
@@ -5164,6 +5171,16 @@ class CommandHandlersMixin:
                 event.stop_event()
                 return True
             return False
+        if not runtime_persona_setting(
+            self,
+            "enable_user_requested_photo_generation",
+            True,
+        ):
+            if explicit_plugin_request:
+                await self._reply(event, "管理员已关闭用户请求生图/改图。")
+                event.stop_event()
+                return True
+            return False
         mode = _single_line(runtime_persona_setting(self, 'natural_language_photo_generation_mode', "tool_first"), 40).lower()
         if mode not in {"tool_first", "rule_fast", "off"}:
             mode = "tool_first"
@@ -5491,6 +5508,14 @@ class CommandHandlersMixin:
         forced_kind = action_kind_map.get(action_text, "text2img")
         if not runtime_persona_setting(self, 'enable_photo_text_action', False):
             await self._reply(event, self._natural_language_photo_disabled_text("photo_off"))
+            event.stop_event()
+            return True
+        if not runtime_persona_setting(
+            self,
+            "enable_user_requested_photo_generation",
+            True,
+        ):
+            await self._reply(event, "管理员已关闭用户请求生图/改图。")
             event.stop_event()
             return True
         scope_checker = getattr(self, "_photo_generation_scope_allowed", None)

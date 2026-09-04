@@ -582,6 +582,24 @@ async def test_current_image_contract_uses_owner_free_task_and_transient_bytes(
     }
 
 
+def test_reference_import_receipt_accepts_legacy_tokens_and_extension_fields() -> None:
+    lease_id, asset_ids = ImageCompanionBridgeMixin._image_import_receipt(
+        {
+            "result_version": "image.reference-import-result.v1",
+            "instance_generation": 7,
+            "status": "succeeded",
+            "lease_id": "reflease_" + "a" * 32,
+            "asset_ids": ["ref_" + "b" * 32],
+            "metadata": {"source": "hot-reloaded-image-api"},
+        },
+        generation=7,
+        expected_assets=1,
+    )
+
+    assert lease_id == "reflease_" + "a" * 32
+    assert asset_ids == ("ref_" + "b" * 32,)
+
+
 @pytest.mark.asyncio
 async def test_formal_image_legacy_rollout_uses_explicit_compatibility_method(
     tmp_path: Path,
@@ -836,6 +854,12 @@ async def test_current_image_rejects_fifo_reference_without_import(
 
 def test_current_image_status_uses_owner_free_surface(tmp_path: Path) -> None:
     class Api(_CurrentImageApi):
+        def status(self) -> dict[str, object]:
+            value = super().status()
+            value.pop("backends", None)
+            value["generation"] = {"backends": {"external": True}}
+            return value
+
         def capability_status(self, _owner):
             raise AssertionError("formal status must not receive Companion owner")
 
@@ -911,6 +935,37 @@ async def test_current_image_rejects_control_characters_in_failure_code(
     assert result[1] == ""
     assert "image_result_malformed" in result[2]
     assert "secret" not in result[2]
+
+
+@pytest.mark.asyncio
+async def test_current_image_failure_clears_previous_generation_metadata(
+    tmp_path: Path,
+) -> None:
+    class FailedApi(_CurrentImageApi):
+        async def execute_task(self, value: object) -> dict[str, object]:
+            result = await super().execute_task(value)
+            result["status"] = "failed"
+            result["output"] = None
+            result["error"] = {"code": "generation_failed", "stage": "backend"}
+            return result
+
+    harness = _BridgeHarness()
+    harness._image_companion_generation_metadata = {
+        "reference_id": "stale-reference",
+        "reference_used": True,
+    }
+    api = FailedApi(tmp_path / "output.png")
+    harness._image_companion_api = lambda: api
+
+    result = await harness._image_companion_generate(
+        workflow_kind="selfie",
+        prompt_text="test",
+        session_key="test",
+    )
+
+    assert result[1] == ""
+    assert "generation_failed" in result[2]
+    assert harness._image_companion_last_metadata() == {}
 
 
 @pytest.mark.asyncio

@@ -82,6 +82,20 @@ def _message_text(message: Any) -> str:
     return ""
 
 
+def _message_key(message: Any, index: int) -> str:
+    """Return a stable key so a sliding context window is only folded once."""
+    if isinstance(message, Mapping):
+        message_id = str(message.get("message_id") or message.get("id") or "").strip()
+        if message_id:
+            return f"id:{message_id}"
+        ts = str(message.get("ts") or message.get("timestamp") or "").strip()
+        sender = str(message.get("sender_id") or message.get("user_id") or "").strip()
+        text = _message_text(message).strip()
+        if ts or sender or text:
+            return f"msg:{ts}|{sender}|{text}"
+    return f"idx:{index}:{_message_text(message).strip()}"
+
+
 def _decay(score: float, half_life: float, elapsed: float) -> float:
     if score <= 0:
         return 0.0
@@ -121,6 +135,9 @@ def project_group_mood(value: Any, *, now: Any) -> dict[str, Any]:
         "updated_at": updated,
         "decayed_at": current_ts,
         "message_count": max(0, int(_finite(raw.get("message_count"), 0))),
+        "processed_message_keys": [
+            str(key) for key in (raw.get("processed_message_keys") or []) if str(key)
+        ][-128:],
     }
 
 
@@ -138,16 +155,28 @@ def settle_group_mood(
     weighted blend of the surviving tension and burst energy.
     """
     current_ts = max(0.0, _finite(now)) if now is not None else max(0.0, _finite(current_ts, 0.0))
+    message_list = list(messages)
     prior = project_group_mood(existing, now=current_ts)
+    processed = {
+        str(key)
+        for key in (prior.get("processed_message_keys") or [])
+        if str(key)
+    }
+    processed_order = list(processed)
     scores: dict[str, float] = {}
     for label in MOOD_LABELS:
         scores[label] = prior.get("mood_scores", {}).get(label, 0.0) if prior else 0.0
     burst: dict[str, float] = {label: 0.0 for label in MOOD_LABELS}
     count = 0
-    for message in messages:
+    for index, message in enumerate(message_list):
+        key = _message_key(message, index)
+        if key in processed:
+            continue
         text = _message_text(message)
         if not text:
             continue
+        processed.add(key)
+        processed_order.append(key)
         count += 1
         lowered = text.lower()
         for pattern, mood, weight in _MOOD_SIGNALS:
@@ -166,7 +195,7 @@ def settle_group_mood(
         scores[label] = round(max(0.0, score), 2)
     # Dead silence: an empty / very sparse window raises the silence index.
     message_count = int(prior.get("message_count") or 0) + count
-    if count == 0:
+    if count == 0 and not any(_message_text(message) for message in message_list):
         scores["dead_silence"] = round(min(100.0, scores.get("dead_silence", 0.0) + 10.0), 2)
     elif count >= 3:
         scores["dead_silence"] = round(max(0.0, scores.get("dead_silence", 0.0) - 6.0), 2)
@@ -185,6 +214,7 @@ def settle_group_mood(
         "updated_at": current_ts,
         "decayed_at": current_ts,
         "message_count": message_count,
+        "processed_message_keys": processed_order[-128:],
     }
 
 

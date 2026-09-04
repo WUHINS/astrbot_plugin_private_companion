@@ -2495,7 +2495,18 @@ class GroupObservationMixin:
             if rendered:
                 sections.append(prompt_section("群聊名场面（共同回忆软参考，与人物画像互相印证）", rendered))
         if _persona_value(self, "enable_group_roleplay_strength", False) and mood:
-            projection = project_roleplay_strength(mood, expression_band="relaxed", now=now)
+            expression_band = "relaxed"
+            users = self.data.get("users", {}) if isinstance(getattr(self, "data", None), dict) else {}
+            current_user = users.get(sender_id) if isinstance(users, dict) else None
+            if isinstance(current_user, dict):
+                interaction = current_user.get("current_interaction")
+                if isinstance(interaction, dict):
+                    expression_band = str(
+                        interaction.get("expression_band")
+                        or interaction.get("base_band")
+                        or expression_band
+                    )
+            projection = project_roleplay_strength(mood, expression_band=expression_band, now=now)
             voice = _single_line(projection.get("voice"), 200)
             if voice:
                 sections.append(prompt_section("扮演强度", voice))
@@ -2541,7 +2552,13 @@ class GroupObservationMixin:
         now = _now_ts()
         group["social_joke_boundary"] = settle_joke_boundary(
             group.get("social_joke_boundary"),
-            messages=[{"sender_id": sender_id, "kind": "recall"}],
+            messages=[
+                {
+                    "sender_id": sender_id,
+                    "kind": "recall",
+                    "signal_id": f"recall:{sender_id}:{now:.6f}",
+                }
+            ],
             now=now,
         )
         saver(sections={"groups"})

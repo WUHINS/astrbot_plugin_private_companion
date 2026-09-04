@@ -235,6 +235,15 @@ def settle_group_moments(
             "score": _finite(candidate.get("score"), 0.0),
             "reasons": candidate.get("reasons") if isinstance(candidate.get("reasons"), list) else [],
         }
+        previous = stored.get(key)
+        if previous is not None:
+            # Re-scanning the live window must not refresh TTL indefinitely.
+            normalized["created_at"] = previous.get("created_at", normalized["created_at"])
+            normalized["expires_at"] = previous.get("expires_at", normalized["expires_at"])
+            normalized["score"] = max(
+                _finite(previous.get("score"), 0.0),
+                normalized["score"],
+            )
         stored[key] = normalized
     moments = sorted(stored.values(), key=lambda entry: _finite(entry.get("ts")), reverse=True)
     moments = moments[:max(1, min(200, max_stored))]

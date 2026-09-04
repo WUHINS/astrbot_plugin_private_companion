@@ -68,6 +68,23 @@ def _member_key(message: Any) -> str:
     return ""
 
 
+def _message_key(message: Any, index: int) -> str:
+    message_id = ""
+    if isinstance(message, Mapping):
+        message_id = str(message.get("message_id") or message.get("id") or message.get("signal_id") or "").strip()
+        if message_id:
+            return f"id:{message_id}"
+        ts = str(message.get("ts") or message.get("timestamp") or "").strip()
+        sender = _member_key(message)
+        kind = str(message.get("kind") or message.get("signal") or "").strip()
+        text = str(message.get("text") or message.get("content") or message.get("message") or "").strip()
+        if ts:
+            return f"msg:{ts}|{sender}|{kind}|{text}"
+        if sender or kind or text:
+            return f"msg:{index}|{sender}|{kind}|{text}"
+    return f"idx:{index}"
+
+
 def is_serious_objection(text: Any) -> bool:
     lowered = str(text or "").lower()
     return any(re.search(pattern, lowered) for pattern in _OBJECTION_PATTERNS)
@@ -107,6 +124,9 @@ def project_joke_boundary(
         "version": JOKE_BOUNDARY_VERSION,
         "members": members,
         "updated_at": _finite(raw.get("updated_at")),
+        "processed_message_keys": [
+            str(key) for key in (raw.get("processed_message_keys") or []) if str(key)
+        ][-128:],
     }
 
 
@@ -124,12 +144,23 @@ def settle_joke_boundary(
     """
     current_ts = max(0.0, _finite(now)) if now is not None else 0.0
     prior = project_joke_boundary(existing, now=current_ts)
+    processed = {
+        str(key)
+        for key in (prior.get("processed_message_keys") or [])
+        if str(key)
+    }
+    processed_order = list(processed)
     members: dict[str, dict[str, Any]] = {
         str(key): dict(entry) for key, entry in (prior.get("members") or {}).items()
     }
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, Mapping):
             continue
+        key = _message_key(message, index)
+        if key in processed:
+            continue
+        processed.add(key)
+        processed_order.append(key)
         key = _member_key(message)
         if not key:
             continue
@@ -158,6 +189,7 @@ def settle_joke_boundary(
         "version": JOKE_BOUNDARY_VERSION,
         "members": members,
         "updated_at": current_ts,
+        "processed_message_keys": processed_order[-128:],
     }
 
 

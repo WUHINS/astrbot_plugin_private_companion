@@ -91,6 +91,13 @@ class GroupMoodContractTests(unittest.TestCase):
         self.assertLess(later["mood_scores"]["tease"], settled["mood_scores"]["tease"])
         self.assertIn(later["top_mood"], MOOD_LABELS)
 
+    def test_reprocessing_same_window_does_not_accumulate(self):
+        message = {"message_id": "m1", "sender_id": "u1", "text": "哈哈笑死", "ts": T0}
+        first = settle_group_mood(None, messages=[message], now=T0)
+        second = settle_group_mood(first, messages=[message], now=T0 + 1)
+        self.assertEqual(first["mood_scores"], second["mood_scores"])
+        self.assertEqual(first["message_count"], second["message_count"])
+
     def test_blank_window_raises_dead_silence(self):
         mood = settle_group_mood(None, messages=[], now=T0)
         self.assertGreater(mood["mood_scores"]["dead_silence"], 0)
@@ -155,6 +162,12 @@ class JokeBoundaryContractTests(unittest.TestCase):
         self.assertEqual(1, boundary["members"]["u2"]["recall_count"])
         self.assertGreaterEqual(boundary["members"]["u2"]["sensitivity"], 12)
 
+    def test_reprocessing_same_window_does_not_repeat_objection(self):
+        message = {"message_id": "m1", "sender_id": "u1", "text": "别拿我开玩笑", "ts": T0}
+        first = settle_joke_boundary(None, messages=[message], now=T0)
+        second = settle_joke_boundary(first, messages=[message], now=T0 + 1)
+        self.assertEqual(first["members"], second["members"])
+
     def test_objection_detector(self):
         self.assertTrue(is_serious_objection("别开这种玩笑"))
         self.assertFalse(is_serious_objection("哈哈哈哈"))
@@ -196,6 +209,7 @@ class GroupMomentsContractTests(unittest.TestCase):
         first = settle_group_moments(None, candidates=candidates, now=T0)
         second = settle_group_moments(first, candidates=candidates, now=T0 + 60)
         self.assertEqual(1, len(second["moments"]))
+        self.assertEqual(first["moments"][0]["expires_at"], second["moments"][0]["expires_at"])
 
     def test_format_prompt_renders_sender_line(self):
         candidates = extract_group_moment_candidates(
@@ -261,6 +275,23 @@ class GroupObservationMountTests(unittest.TestCase):
         self.assertTrue(any("氛围" in title for title in titles))
         self.assertTrue(any("名场面" in title for title in titles))
         self.assertTrue(any("扮演强度" in title for title in titles))
+
+    def test_roleplay_uses_current_sender_expression_band(self):
+        group: dict = {
+            "social_mood": settle_group_mood(
+                None, messages=[{"text": "哈哈笑死"}], now=T0
+            )
+        }
+        self.harness.data = {
+            "users": {"b": {"current_interaction": {"expression_band": "hurt"}}}
+        }
+        self.harness._settings["enable_group_roleplay_strength"] = True
+        sections: list[dict] = []
+        self.harness._append_group_social_context_sections(
+            group, sections, sender_id="b", now=T0
+        )
+        roleplay = next(section for section in sections if section.get("title") == "扮演强度")
+        self.assertIn("压低表达强度", roleplay["content"])
 
     def test_async_recall_fills_joke_boundary(self):
         async def run() -> bool:
