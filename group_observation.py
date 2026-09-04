@@ -128,6 +128,7 @@ from .domains.social.group_mood import settle_group_mood, summarize_group_mood
 from .domains.social.roleplay_strength import project_roleplay_strength
 from .domains.social.group_moments import (
     extract_group_moment_candidates,
+    extract_moment_portrait_candidates,
     format_group_moments_prompt,
     settle_group_moments,
 )
@@ -1258,6 +1259,7 @@ class GroupObservationMixin:
         if _persona_value(self, "enable_group_social_context", False):
             try:
                 self._update_group_social_context(group, now=now)
+                self._sync_current_speaker_moment_portraits(group, event=event, sender_id=sender_id)
             except Exception as exc:
                 logger.debug(
                     "[PrivateCompanion] 群聊社交氛围/名场面/边界更新失败: %s",
@@ -2434,6 +2436,9 @@ class GroupObservationMixin:
         if _persona_value(self, "enable_group_moments", False):
             try:
                 self._update_group_moments(group, now=now)
+                if _persona_value(self, "enable_group_moment_portrait", False):
+                    self._update_group_moment_portrait_candidates(group, now=now)
+                    self._settle_group_moment_portraits(group, now=now)
             except Exception as exc:
                 logger.debug("[PrivateCompanion] 群聊名场面更新失败: %s", _single_line(exc, 120))
         if _persona_value(self, "enable_group_joke_guard", False):
@@ -2460,6 +2465,128 @@ class GroupObservationMixin:
             candidates=candidates,
             now=now,
         )
+
+    def _update_group_moment_portrait_candidates(self, group: dict[str, Any], *, now: float) -> None:
+        """把当前名场面按规则收敛为画像证据候选，暂存到群状态供桥接沉降。
+
+        只做纯规则判定与暂存，不访问网络/记忆插件；真正的沉降由 adapter 在
+        群状态刷新后统一送出（见 memory_companion_adapter）。
+        """
+        moments = group.get("social_moments")
+        candidates = extract_moment_portrait_candidates(moments, now=now)
+        group["moment_portrait_candidates"] = candidates
+
+    def _settle_group_moment_portraits(self, group: dict[str, Any], *, now: float) -> None:
+        """把名场面画像候选沉淀到私伴自带的用户画像（companion_memory）。
+
+        主落点：对每个候选，按 sender 定位到本地 users 中的 user，写入一条
+        companion_memory 画像条目（communication_preference→preference，
+        boundary→boundary），用文本签名去重、受 max_companion_memory_items
+        约束。只写群内互动型维度，不写身份/职业等客观事实。
+        """
+        candidates = group.get("moment_portrait_candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return
+        users = self.data.get("users")
+        if not isinstance(users, dict):
+            return
+        now_ts = _now_ts()
+        today = datetime.now().strftime("%Y-%m-%d %H:%M")
+        max_items = max(8, _safe_int(_persona_value(self, "max_companion_memory_items", 36), 36, 8, 120))
+
+        def signature(text: str) -> str:
+            return re.sub(r"[^\u4e00-\u9fffA-Za-z0-9]+", "", str(text or "")).lower()[:80]
+
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            sender = _single_line(candidate.get("sender"), 120)
+            dimension = _single_line(candidate.get("dimension"), 40)
+            claim = _single_line(candidate.get("claim"), 300)
+            if not sender or not dimension or not claim:
+                continue
+            user = users.get(str(sender))
+            if not isinstance(user, dict):
+                continue
+            memory = user.get("companion_memory")
+            if not isinstance(memory, dict):
+                memory = {}
+                user["companion_memory"] = memory
+            raw_items = memory.get("items")
+            items = raw_items if isinstance(raw_items, list) else []
+            kind = "boundary" if dimension == "boundary" else "preference"
+            item = {
+                "text": claim,
+                "kind": kind,
+                "weight": min(5, max(1, 1 + int(round(_safe_float(candidate.get("score"), 0.0))))),
+                "reason": "group_moment_rule",
+                "dimension": dimension,
+                "source_group": _single_line(group.get("group_id") or group.get("group_name"), 80),
+                "created_at": today,
+                "created_ts": now_ts,
+            }
+            sig = signature(claim)
+            deduped = [
+                old
+                for old in items
+                if isinstance(old, dict) and signature(_single_line(old.get("text"), 300)) != sig
+            ]
+            deduped.insert(0, item)
+            memory["items"] = deduped[:max_items]
+            memory["updated_at"] = today
+
+    def _sync_current_speaker_moment_portraits(self, group: dict[str, Any], *, event: Any, sender_id: str) -> None:
+        """尽力而为地把当前说话人的名场面候选沉降到记忆插件画像车道。
+
+        Fire-and-forget：群观察链路为同步方法，这里把异步桥接调用作为任务
+        调度，不阻塞群消息处理。仅当事件携带已解析的 person_ref（当前说话人
+        统一画像上下文）且存在与 sender 匹配的名场面候选时才会触发；缺失
+        bridge、能力或候选时静默返回，不影响主流程。
+        """
+        if not event:
+            return
+        candidates = group.get("moment_portrait_candidates")
+        if not isinstance(candidates, list) or not candidates:
+            return
+        if not sender_id:
+            return
+        person_ref = None
+        dto = getattr(event, "private_companion_unified_profile_context", None)
+        if isinstance(dto, dict) and isinstance(dto.get("person_ref"), dict):
+            person_ref = dto.get("person_ref")
+        if not person_ref:
+            return
+        speaker_candidates = [
+            candidate
+            for candidate in candidates
+            if isinstance(candidate, dict)
+            and _single_line(candidate.get("sender"), 120) == str(sender_id)
+        ]
+        if not speaker_candidates:
+            return
+        sender_method = getattr(self, "_memory_companion_record_group_moment_portraits", None)
+        if not callable(sender_method):
+            return
+        session_id = _single_line(getattr(event, "session_id", ""), 200) or str(getattr(event, "unified_msg_origin", ""))
+        group_id = _single_line(group.get("group_id") or group.get("id"), 160)
+        message_id = _single_line(getattr(event, "message_id", ""), 120)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        try:
+            loop.create_task(
+                sender_method(
+                    person_ref,
+                    speaker_candidates,
+                    scope="group",
+                    session_id=session_id,
+                    group_id=group_id,
+                    message_id=message_id,
+                )
+            )
+        except Exception as exc:
+            logger.debug("[PrivateCompanion] 调度名场面画像沉降失败: %s", _single_line(exc, 160))
 
     def _update_group_joke_boundary(self, group: dict[str, Any], *, now: float) -> None:
         messages = self._filtered_group_recent_messages(group)[-16:]

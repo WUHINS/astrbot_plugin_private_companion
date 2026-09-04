@@ -278,10 +278,101 @@ def format_group_moments_prompt(value: Any, *, now: Any = None, limit: int = 3) 
     return "\n".join(lines)
 
 
+# ---------------------------------------------------------------------------
+# 名场面 → 画像证据（P1：纯规则、无 IO/无 LLM）
+#
+# 名场面携带着"谁在什么语境下口无遮拦/惯用某梗/被公开处刑"等互动信号，
+# 这些信号是用户画像（communication_preference / boundary 维度）最鲜活的
+# 非自述证据。此函数把已沉淀的名场面按规则收敛为画像证据候选，交由桥接层
+# 沉降到记忆插件的 portrait 车道。只输出"群内互动型"维度，绝不把名场面当作
+# 身份/职业/生日等客观事实来源（那些仍只信用户自述）。
+# ---------------------------------------------------------------------------
+
+# 火花词 → 沟通偏好证据：同一 sender 在一个场次内命中这些梗词，说明其惯用玩梗风格。
+_MOMENT_PORTRAIT_SPARK_DIMENSION = "communication_preference"
+# 名场面可沉淀的画像维度（群内互动型），供桥接层与测试引用。
+GROUP_MOMENTS_PORTRAIT_DIMENSIONS = ("communication_preference", "boundary")
+# 不适标记 → 接梗边界证据：这些表达常在"玩笑越界"语境出现，应沉淀为边界而不是偏好。
+_MOMENT_PORTRAIT_BOUNDARY_MARKERS = (
+    "别拿我开玩笑",
+    "不许乱说",
+    "别造谣",
+    "过分了",
+    "别太过分",
+    "生气了",
+    "真敢说",
+)
+
+
+def extract_moment_portrait_candidates(
+    value: Any,
+    *,
+    now: Any = None,
+    min_score: float = 1.0,
+    max_candidates: int = 8,
+) -> list[dict[str, Any]]:
+    """从已沉淀的名场面列表提取画像证据候选（纯规则）。
+
+    返回结构化的候选（含 sender 锚点与维度/主张），不包含对任何持久层的
+    写入；调用方负责身份映射、去重与沉降。``min_score`` 之上且带 sender 的
+    有效名场面才会被考虑，避免冷场/零星噪声污染画像。
+    """
+    current_ts = max(0.0, _finite(now, time.time()))
+    moments = value.get("moments") if isinstance(value, Mapping) else None
+    if not isinstance(moments, list):
+        return []
+    active = [
+        entry for entry in moments
+        if isinstance(entry, Mapping)
+        and _text(entry)
+        and _finite(entry.get("score"), 0.0) >= min_score
+        and (not _finite(entry.get("expires_at")) or _finite(entry.get("expires_at")) >= current_ts)
+    ]
+    if not active:
+        return []
+    candidates: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for entry in active:
+        sender = str(entry.get("sender") or "").strip()
+        text = _text(entry)
+        if not sender or not text:
+            continue
+        dimension = ""
+        claim = ""
+        lower = text.lower()
+        spark_hits = [pattern for pattern in _SPARK_PATTERNS if pattern and pattern in text]
+        boundary_hits = [marker for marker in _MOMENT_PORTRAIT_BOUNDARY_MARKERS if marker in lower]
+        if boundary_hits:
+            dimension = "boundary"
+            claim = f"玩笑/接梗边界：在群里对\"{sender}\"开类似玩笑需谨慎（触发过不适信号）。"
+        elif spark_hits:
+            dimension = _MOMENT_PORTRAIT_SPARK_DIMENSION
+            claim = f"惯用玩梗风格：名场面语境中常用“{'/'.join(spark_hits[:3])}”这类表达带动气氛。"
+        if not dimension or not claim:
+            continue
+        key = (sender, dimension)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidates.append({
+            "sender": sender,
+            "dimension": dimension,
+            "claim": claim,
+            "evidence_text": text[:200],
+            "ts": _finite(entry.get("ts"), current_ts),
+            "score": round(_finite(entry.get("score"), 0.0), 2),
+            "reasons": [str(item) for item in (entry.get("reasons") or []) if str(item)][:6],
+        })
+    candidates.sort(key=lambda item: _finite(item.get("score"), 0.0), reverse=True)
+    return candidates[:max(1, min(50, max_candidates))]
+
+
 __all__ = [
     "GROUP_MOMENTS_VERSION",
+    "GROUP_MOMENTS_PORTRAIT_DIMENSIONS",
     "extract_group_moment_candidates",
     "refine_group_moments_candidates",
     "settle_group_moments",
     "format_group_moments_prompt",
+    "extract_moment_portrait_candidates",
 ]

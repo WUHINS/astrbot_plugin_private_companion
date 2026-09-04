@@ -1279,6 +1279,66 @@ class MemoryCompanionAdapterMixin:
             ][:8],
         }
 
+    async def _memory_companion_record_group_moment_portraits(
+        self,
+        person_ref: dict[str, Any],
+        candidates: list[dict[str, Any]],
+        *,
+        scope: str = "",
+        session_id: str = "",
+        group_id: str = "",
+        message_id: str = "",
+    ) -> dict[str, Any]:
+        """把名场面画像候选经桥接沉降到记忆插件画像车道（尽力而为，失败静默）。
+
+        只接受 person_ref 已解析（当前说话人相关）的名场面候选；群成员名场面
+        由主落点（companion_memory）覆盖，这里不做跨用户身份猜测。bridge 或
+        方法缺失、能力校验失败均静默返回 degraded，不影响群聊主流程。
+        """
+        base = {
+            "ok": False,
+            "facts": 0,
+            "state": "degraded",
+            "error_code": None,
+        }
+        if not isinstance(person_ref, dict) or not isinstance(candidates, list) or not candidates:
+            return {**base, "error_code": "invalid_args"}
+        bridge = self._memory_companion_bridge()
+        if bridge is None:
+            return {**base, "state": self._bridge_last_status.get("state", "degraded"), "error_code": "bridge_unavailable"}
+        recorder = getattr(bridge, "record_group_moment_portrait", None)
+        if not callable(recorder):
+            return {**base, "error_code": "method_missing"}
+        capability = self._memory_companion_emotion_producer_capability(bridge)
+        if capability is None:
+            return {**base, "error_code": "producer_capability_unavailable"}
+        try:
+            result = recorder(
+                person_ref,
+                candidates,
+                scope=_single_line(scope, 80),
+                session_id=_single_line(session_id, 200),
+                group_id=_single_line(group_id, 160),
+                message_id=_single_line(message_id, 120),
+                producer_capability=capability,
+            )
+            if asyncio.iscoroutine(result) or hasattr(result, "__await__"):
+                result = await result
+        except Exception as exc:
+            if self._memory_companion_optional_dependency_failed(exc, where="record_group_moment_portrait"):
+                return dict(self._bridge_last_status)
+            logger.debug("[PrivateCompanion] 名场面画像沉降失败: %s", _single_line(exc, 160))
+            return {**base, "error_code": "portrait_bridge_exception"}
+        if not isinstance(result, dict):
+            return {**base, "error_code": "invalid_portrait_response"}
+        return {
+            "ok": bool(result.get("ok")),
+            "facts": int(result.get("facts") or 0),
+            "person_id": _single_line(result.get("person_id"), 80),
+            "state": _single_line(result.get("state"), 40) or ("recorded" if result.get("ok") else "degraded"),
+            "error_code": _single_line(result.get("error_code"), 80),
+        }
+
     def _memory_companion_coordination_status(self) -> dict[str, Any]:
         bridge = self._memory_companion_bridge()
         if bridge is None:

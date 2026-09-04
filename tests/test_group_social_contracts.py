@@ -20,6 +20,7 @@ from astrbot_plugin_private_companion.domains.social.roleplay_strength import (
 )
 from astrbot_plugin_private_companion.domains.social.group_moments import (
     extract_group_moment_candidates,
+    extract_moment_portrait_candidates,
     format_group_moments_prompt,
     settle_group_moments,
 )
@@ -58,10 +59,12 @@ class GroupSocialHarness(GroupObservationMixin):
             "enable_group_roleplay_strength": False,
             "enable_group_moments": False,
             "enable_group_joke_guard": False,
+            "enable_group_moment_portrait": False,
         }
         self.messages: list[dict] = []
         self.groups: dict[str, dict] = {}
         self.saved_sections: list[object] = []
+        self.data: dict[str, object] = {"users": {}}
 
     def persona_setting(self, key: str, default=None):
         return self._settings.get(key, default)
@@ -302,6 +305,69 @@ class GroupObservationMountTests(unittest.TestCase):
         boundary = self.harness.groups["group-x"]["social_joke_boundary"]
         self.assertGreaterEqual(boundary["members"]["u9"]["sensitivity"], 12)
         self.assertIn({"groups"}, self.harness.saved_sections)
+
+
+class MomentPortraitContractTests(unittest.TestCase):
+    """"名场面→画像证据"纯规则 + 主落点（companion_memory）契约测试。"""
+
+    def setUp(self) -> None:
+        self.harness = GroupSocialHarness()
+
+    def test_extract_moment_portrait_infers_preference_from_spark(self):
+        moments = {
+            "version": "group_moments.v1",
+            "moments": [
+                {"hash": "a", "sender": "u1", "text": "哈哈笑死我了", "ts": T0, "expires_at": T0 + 86400, "score": 3.0, "reasons": ["spark"]},
+            ],
+        }
+        candidates = extract_moment_portrait_candidates(moments, now=T0 + 10)
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("u1", candidates[0]["sender"])
+        self.assertEqual("communication_preference", candidates[0]["dimension"])
+        self.assertIn("笑死", candidates[0]["claim"])
+
+    def test_extract_moment_portrait_infers_boundary_from_discomfort(self):
+        moments = {
+            "version": "group_moments.v1",
+            "moments": [
+                {"hash": "b", "sender": "u2", "text": "别拿我开玩笑", "ts": T0, "expires_at": T0 + 86400, "score": 2.0, "reasons": ["spark"]},
+            ],
+        }
+        candidates = extract_moment_portrait_candidates(moments, now=T0 + 10)
+        self.assertEqual(1, len(candidates))
+        self.assertEqual("boundary", candidates[0]["dimension"])
+
+    def test_extract_moment_portrait_skips_low_score_noise(self):
+        moments = {
+            "version": "group_moments.v1",
+            "moments": [
+                {"hash": "c", "sender": "u3", "text": "普通消息", "ts": T0, "expires_at": T0 + 86400, "score": 0.2, "reasons": []},
+            ],
+        }
+        self.assertEqual([], extract_moment_portrait_candidates(moments, now=T0 + 10))
+
+    def test_settle_moment_portraits_writes_companion_memory(self):
+        self.harness._settings["enable_group_moments"] = True
+        self.harness._settings["enable_group_moment_portrait"] = True
+        self.harness.data["users"] = {"u1": {"umo": "qq:FriendMessage:u1"}}
+        self.harness.messages = [
+            {"sender_id": "u1", "name": "漂", "text": "这谁顶得住", "ts": T0},
+        ]
+        group: dict = {}
+        self.harness._update_group_social_context(group, now=T0)
+        user = self.harness.data["users"]["u1"]
+        items = user["companion_memory"]["items"]
+        self.assertTrue(any(item.get("kind") == "preference" for item in items))
+
+    def test_settle_moment_portraits_does_not_write_unknown_users(self):
+        self.harness._settings["enable_group_moments"] = True
+        self.harness._settings["enable_group_moment_portrait"] = True
+        self.harness.messages = [
+            {"sender_id": "ghost", "name": "幽灵", "text": "经典名场面", "ts": T0},
+        ]
+        group: dict = {}
+        self.harness._update_group_social_context(group, now=T0)
+        self.assertNotIn("ghost", self.harness.data["users"])
 
 
 if __name__ == "__main__":
